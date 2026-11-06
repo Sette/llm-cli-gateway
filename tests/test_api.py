@@ -179,9 +179,50 @@ def test_auth(bins, monkeypatch):
     assert c.post("/v1/chat/completions", json=CORPO, headers=certo).status_code == 200
 
 
-def test_stream_recusado(bins):
+def _eventos(r) -> list:
+    linhas = [l.removeprefix("data: ") for l in r.text.splitlines() if l.startswith("data: ")]
+    assert linhas[-1] == "[DONE]"
+    return [json.loads(l) for l in linhas[:-1]]
+
+
+def test_stream_emulado(bins, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
+    corpo = {**CORPO, "model": "claude/haiku", "stream": True, "stream_options": {"include_usage": True}}
+    r = _client(bins).post("/v1/chat/completions", json=corpo)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    eventos = _eventos(r)
+    assert all(e["object"] == "chat.completion.chunk" and e["model"] == "claude/haiku" for e in eventos)
+    assert eventos[0]["choices"][0]["delta"]["role"] == "assistant"
+    assert eventos[0]["choices"][0]["delta"]["content"]
+    assert eventos[1]["choices"][0]["finish_reason"] == "stop"
+    assert eventos[2]["choices"] == [] and eventos[2]["usage"]["total_tokens"] > 0
+
+
+def test_stream_sem_usage_por_padrao(bins, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
     r = _client(bins).post("/v1/chat/completions", json={**CORPO, "stream": True})
+    assert r.status_code == 200
+    assert all("usage" not in e for e in _eventos(r))
+
+
+def test_stream_erro_sai_com_status(bins):
+    r = _client(bins).post("/v1/chat/completions", json={**CORPO, "model": "xyz/abc", "stream": True})
     assert r.status_code == 400
+    assert "error" in r.json()
+
+
+def test_stream_sdk_openai(bins, monkeypatch):
+    from openai import OpenAI
+
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
+    client = OpenAI(base_url="http://testserver/v1", api_key="x", http_client=_client(bins))
+    partes = [
+        c.choices[0].delta.content or ""
+        for c in client.chat.completions.create(model="codex/gpt-x", messages=CORPO["messages"], stream=True)
+        if c.choices
+    ]
+    assert "".join(partes)
 
 
 def test_json_schema_vai_para_flag(bins, log, monkeypatch):

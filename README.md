@@ -1,6 +1,70 @@
 # llm-cli-gateway
 
-API compatível com a OpenAI (`POST /v1/chat/completions`) que responde chamando um **CLI de agente** já logado na máquina: Antigravity (`agy`), Claude Code (`claude`), Codex (`codex`) ou Kiro (`kiro-cli`). Serve para usar os créditos e as assinaturas desses CLIs em qualquer código que já fala com a OpenAI ou com o LiteLLM, como os relatórios do health score, sem mudar o cliente.
+API compatível com a OpenAI (`POST /v1/chat/completions`) que roda **na sua máquina** e responde chamando um **CLI de agente** já instalado e logado nela: Antigravity (`agy`), Claude Code (`claude`), Codex (`codex`) ou Kiro (`kiro-cli`).
+
+> **Ferramenta de desenvolvimento local.** O gateway existe para economizar durante o desenvolvimento: em vez de pagar por token numa API de LLM enquanto você escreve, testa e ajusta código que chama um modelo, você aponta esse código para `http://127.0.0.1:8787/v1` e usa os créditos e as assinaturas dos CLIs que já tem. Ele **não** é um serviço para produção, para ficar exposto na rede ou para ser compartilhado entre pessoas.
+
+## Para que serve
+
+- Desenvolver e testar localmente código que já fala com a OpenAI ou com o LiteLLM (prompts, parsing de JSON, pipelines de relatório), sem mudar o cliente: só troque a URL base.
+- Rodar experimentos e comparações entre modelos (Gemini, Claude, GPT…) gastando as assinaturas dos CLIs, e não uma chave de API paga por uso.
+- Rodar lotes pequenos e médios de chamadas na própria máquina, como os relatórios do health score em dev.
+
+## Uma API, vários clientes
+
+O gateway fala o formato `chat/completions` da OpenAI, que é o padrão de fato do mercado. Então qualquer ferramenta que aceite um "provedor compatível com a OpenAI" com URL base própria passa a usar os CLIs da sua máquina, sem plugin nem adaptador:
+
+- **SDKs:** `openai` (Python e JS), com `base_url="http://127.0.0.1:8787/v1"`.
+- **Frameworks:** LiteLLM (provedor `openai/` ou `litellm` com `api_base`), LangChain (`ChatOpenAI(base_url=...)`), LlamaIndex, DSPy, pydantic-ai e afins.
+- **Assistentes e agentes pessoais**, como o [OpenClaw](https://openclaw.ai), que aceita provedores personalizados.
+- **Scripts e `curl`**, para testar um prompt rápido.
+
+E um único endpoint dá acesso a vários fornecedores: basta trocar o `model` (`agy/…`, `claude/…`, `codex/…`, `kiro/…`) para comparar Gemini, Claude e GPT no mesmo código.
+
+### Exemplo: OpenClaw
+
+No `~/.openclaw/openclaw.json`, cadastre o gateway como provedor em `models.providers` e libere os modelos em `agents.defaults.models`. O esboço abaixo segue o formato de provedor personalizado do OpenClaw. Confira os nomes dos campos na documentação da versão que você usa:
+
+```json5
+{
+  models: {
+    providers: {
+      "llm-cli-gateway": {
+        baseUrl: "http://127.0.0.1:8787/v1",
+        apiKey: "<API_KEY, ou qualquer valor se ela estiver vazia>",
+        api: "openai-completions",
+        models: [
+          { id: "claude/sonnet", name: "Claude Sonnet (via CLI)" },
+          { id: "agy/gemini-3.7-flash-low", name: "Gemini Flash (via agy)" }
+        ]
+      }
+    }
+  },
+  agents: {
+    defaults: {
+      models: ["llm-cli-gateway/claude/sonnet", "llm-cli-gateway/agy/gemini-3.7-flash-low"]
+    }
+  }
+}
+```
+
+**Limites a conhecer antes de plugar um agente:**
+
+- **Streaming emulado.** `stream: true` funciona, mas a resposta chega inteira num chunk só, depois que o CLI termina. O cliente não vê o texto aparecendo aos poucos.
+- **Sem tool calling.** O campo `tools` é ignorado, então o modelo nunca devolve `tool_calls`. Isso basta para conversa, resumo, classificação e respostas em JSON. Mas um agente que dependa de ferramentas (rodar comandos, navegar, editar arquivos) não consegue executá-las por este provedor.
+
+## Para que não serve
+
+- **Produção.** Cada chamada abre um processo do CLI (segundos de latência, ~3–11 mil tokens de system prompt do agente por chamada), o streaming é só emulado, e os parâmetros de amostragem (`temperature`, `max_tokens`…) são ignorados. Em produção, use a API do fornecedor ou o LiteLLM da plataforma.
+- **Servidor compartilhado.** As chamadas saem pela conta logada na máquina de quem roda o gateway. Por isso ele escuta em `127.0.0.1` por padrão. Não exponha a porta na rede nem o coloque atrás de um proxy público, mesmo com `API_KEY`.
+- **Substituto de API key.** Os termos de uso de cada fornecedor limitam o que se pode fazer com uma assinatura. Use o gateway para o seu próprio trabalho de desenvolvimento e confira os termos do CLI que for usar.
+
+## Pré-requisitos
+
+- Python 3.12+ e [uv](https://docs.astral.sh/uv/).
+- Ao menos um dos CLIs instalado, no `PATH` e logado na sua conta: `agy`, `claude`, `codex` ou `kiro-cli`. O gateway não faz login nem guarda credenciais: usa a sessão que o CLI já tem.
+
+## Roteamento pelo modelo
 
 O CLI sai do prefixo do modelo:
 
@@ -22,6 +86,8 @@ cp .env.example .env   # opcional
 uv run llm-cli-gateway  # http://127.0.0.1:8787
 ```
 
+A partir daí, qualquer cliente da OpenAI funciona com `base_url="http://127.0.0.1:8787/v1"`.
+
 Cada CLI precisa estar instalado e logado: confira com `agy models`, `claude -p oi`, `codex exec oi` e `kiro-cli chat --no-interactive oi`. O `GET /health` mostra quais estão disponíveis. A API lê o `.env` da raiz do projeto ao subir. Uma variável já exportada no shell ganha do `.env`.
 
 ### Variáveis globais
@@ -31,7 +97,7 @@ Cada CLI precisa estar instalado e logado: confira com `agy models`, `claude -p 
 | `API_KEY` | (vazia) | se definida, exige `Authorization: Bearer <chave>`. Aceita `AGY_API_KEY` como nome antigo |
 | `PROVEDOR_PADRAO` | `agy` | para onde vai um `model` sem prefixo |
 | `MODELO_PADRAO` | `agy/gemini-3.7-flash-low` | quando o pedido não traz `model`. Aceita `AGY_MODELO_PADRAO` |
-| `HOST` / `PORT` | `127.0.0.1` / `8787` | onde escutar |
+| `HOST` / `PORT` | `127.0.0.1` / `8787` | onde escutar. Mantenha `127.0.0.1`: o gateway é para uso local |
 
 ### Variáveis por CLI
 
@@ -53,7 +119,8 @@ Prefixo `AGY_`, `CLAUDE_`, `CODEX_` ou `KIRO_`:
   - aceita `model` (ver a tabela acima), `messages` e `response_format` (`json_object` ou `json_schema`);
   - aceita e ignora `temperature`, `max_tokens`, `metadata` e outros campos. Os CLIs não têm flags para eles;
   - devolve `model` como veio no pedido;
-  - não tem streaming.
+  - `stream: true` é emulado: o CLI responde tudo e o texto sai num único chunk SSE (`chat.completion.chunk`), seguido do `finish_reason` e do `data: [DONE]`. Com `stream_options.include_usage`, um último chunk traz o `usage`. Os erros saem antes do stream, com o status HTTP normal;
+  - não faz tool calling: `tools` e `tool_choice` são ignorados.
 - `GET /v1/models`: os modelos de cada CLI disponível, com o prefixo (`agy/…`, `claude/…`), e `owned_by` = CLI. O do agy vem do `agy models`, com cache de 10 minutos. Os dos outros vêm de `<CLI>_MODELOS`.
 - `GET /health`: `{"providers": {"agy": true, "claude": true, ...}}`. Responde 200 se ao menos um CLI estiver no PATH e ativo.
 

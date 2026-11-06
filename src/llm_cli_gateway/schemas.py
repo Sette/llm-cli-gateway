@@ -23,7 +23,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = None  # o agy não tem flag: ignorada
     max_tokens: int | None = None  # idem
     response_format: dict[str, Any] | None = None
-    stream: bool = False
+    stream: bool = False  # emulado: a resposta inteira sai num chunk só
+    stream_options: dict[str, Any] | None = None
 
 
 class Usage(BaseModel):

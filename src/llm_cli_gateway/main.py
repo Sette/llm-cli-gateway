@@ -6,6 +6,7 @@ O provedor sai do prefixo do modelo (``claude/sonnet``); sem prefixo, vai para o
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import secrets
@@ -13,7 +14,7 @@ import time
 import uuid
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import config as config_mod
 from .prompt import extrair_json, montar
@@ -42,6 +43,36 @@ def _erro_openai(status: int, mensagem: str, retry_after: float | None = None) -
         content={"error": {"message": mensagem, "type": tipo, "code": status}},
         headers=headers,
     )
+
+
+def _sse(id_: str, criado: int, modelo: str, texto: str, usage: Usage | None):
+    """Streaming emulado: o CLI já respondeu tudo, então o texto sai num chunk só.
+
+    Serve para clientes que só falam streaming (assistentes como o OpenClaw). Os
+    erros não passam por aqui: saem antes, com o status HTTP certo.
+    """
+
+    def chunk(delta: dict, fim: str | None = None, extra: dict | None = None) -> str:
+        corpo = {
+            "id": id_,
+            "object": "chat.completion.chunk",
+            "created": criado,
+            "model": modelo,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": fim}],
+            **(extra or {}),
+        }
+        return f"data: {json.dumps(corpo, ensure_ascii=False)}\n\n"
+
+    yield chunk({"role": "assistant", "content": texto})
+    yield chunk({}, "stop")
+    if usage is not None:
+        # Formato da OpenAI com stream_options.include_usage: chunk final sem choices.
+        corpo = {
+            "id": id_, "object": "chat.completion.chunk", "created": criado,
+            "model": modelo, "choices": [], "usage": usage.model_dump(),
+        }
+        yield f"data: {json.dumps(corpo)}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
@@ -109,8 +140,6 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
 
     @app.post("/v1/chat/completions", dependencies=[Depends(autenticar)])
     async def chat_completions(req: ChatCompletionRequest):
-        if req.stream:
-            raise HTTPException(status_code=400, detail="stream=true não é suportado.")
         modelo = req.model or cfg.modelo_padrao
         if not _MODELO_VALIDO.fullmatch(modelo):
             # Ex.: comentário colado no valor do .env. O agy responderia "modelo não
@@ -153,12 +182,22 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
             "chat model=%s status=200 %.1fs tokens=%d+%d",
             modelo, time.monotonic() - inicio, entrada, saida,
         )
+        usage = Usage(prompt_tokens=entrada, completion_tokens=saida, total_tokens=entrada + saida)
+        id_ = f"chatcmpl-{uuid.uuid4().hex}"
+        criado = int(time.time())
+        if req.stream:
+            incluir_usage = bool((req.stream_options or {}).get("include_usage"))
+            return StreamingResponse(
+                _sse(id_, criado, modelo, texto, usage if incluir_usage else None),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache"},
+            )
         return ChatCompletionResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex}",
-            created=int(time.time()),
+            id=id_,
+            created=criado,
             model=modelo,
             choices=[Choice(message=ChoiceMessage(content=texto))],
-            usage=Usage(prompt_tokens=entrada, completion_tokens=saida, total_tokens=entrada + saida),
+            usage=usage,
         )
 
     return app

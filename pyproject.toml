@@ -1,7 +1,7 @@
 [project]
 name = "llm-cli-gateway"
 version = "0.2.0"
-description = "API compatível com a OpenAI (chat/completions) sobre CLIs de agente: agy, claude, codex e kiro"
+description = "API local compatível com a OpenAI (chat/completions) sobre CLIs de agente (agy, claude, codex e kiro), para desenvolvimento e testes"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
