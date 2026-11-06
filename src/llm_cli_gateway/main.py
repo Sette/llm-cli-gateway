@@ -1,11 +1,14 @@
-"""App FastAPI: /v1/chat/completions, /v1/models e /health sobre o agy."""
+"""App FastAPI: /v1/chat/completions, /v1/models e /health sobre os CLIs de agente.
+
+O provedor sai do prefixo do modelo (``claude/sonnet``); sem prefixo, vai para o
+``PROVEDOR_PADRAO``.
+"""
 
 from __future__ import annotations
 
 import logging
 import re
 import secrets
-import shutil
 import time
 import uuid
 
@@ -13,8 +16,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 
 from . import config as config_mod
-from .agy import Agy, AgyErro
 from .prompt import extrair_json, montar
+from .providers import CliProvider, ErroCli, construir, separar
 from .schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -23,21 +26,17 @@ from .schemas import (
     Usage,
 )
 
-logger = logging.getLogger("agy_openai_api")
+logger = logging.getLogger("llm_cli_gateway")
 CACHE_MODELOS_S = 600
-_MODELO_VALIDO = re.compile(r"[A-Za-z0-9._:-]{1,100}")
+_MODELO_VALIDO = re.compile(r"(?:[a-z]+/)?[A-Za-z0-9._:-]{1,100}")
 
 
-def _uso(usage: dict) -> tuple[int, int]:
-    entrada = int(usage.get("input_tokens") or 0) + int(usage.get("cache_read_tokens") or 0)
-    saida = int(usage.get("output_tokens") or 0) + int(usage.get("thinking_tokens") or 0)
-    return entrada, saida
-
-
-def _erro_openai(status: int, mensagem: str) -> JSONResponse:
+def _erro_openai(status: int, mensagem: str, retry_after: float | None = None) -> JSONResponse:
     tipo = {401: "authentication_error", 429: "rate_limit_error"}.get(status, "api_error")
+    if status in (400, 404, 413):
+        tipo = "invalid_request_error"
     # O cliente (SDK da OpenAI, relatórios) espera o Retry-After antes de repetir.
-    headers = {"Retry-After": str(int(Agy.ESPERA_COTA_S))} if status == 429 else None
+    headers = {"Retry-After": str(int(retry_after or 0))} if status == 429 else None
     return JSONResponse(
         status_code=status,
         content={"error": {"message": mensagem, "type": tipo, "code": status}},
@@ -47,9 +46,9 @@ def _erro_openai(status: int, mensagem: str) -> JSONResponse:
 
 def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
     cfg = cfg or config_mod.load()
-    agy = Agy(cfg.agy_bin, cfg.concorrencia, cfg.timeout_s, cfg.intervalo_s, cfg.tentativas)
-    cache: dict = {"em": 0.0, "ids": []}
-    app = FastAPI(title="agy-openai-api", version="0.1.0")
+    provedores = construir(cfg.providers)
+    cache: dict[str, tuple[float, list[str]]] = {}
+    app = FastAPI(title="llm-cli-gateway", version="0.2.0")
 
     def autenticar(authorization: str | None = Header(default=None)) -> None:
         if not cfg.api_key:
@@ -62,27 +61,51 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
     async def _http(_req, exc: HTTPException):
         return _erro_openai(exc.status_code, str(exc.detail))
 
+    def resolver(modelo: str) -> tuple[CliProvider, str]:
+        nome, modelo_cli = separar(modelo, cfg.provedor_padrao)
+        provedor = provedores.get(nome)
+        if provedor is None or not modelo_cli:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Provedor desconhecido em {modelo!r}. Use um de: "
+                + ", ".join(f"{p}/<modelo>" for p in provedores),
+            )
+        return provedor, modelo_cli
+
     @app.get("/health")
     async def health():
-        ok = shutil.which(cfg.agy_bin) is not None
+        estado = {nome: p.disponivel() for nome, p in provedores.items()}
+        ok = any(estado.values())
         return JSONResponse(
             status_code=200 if ok else 503,
-            content={"status": "ok" if ok else "agy não encontrado", "agy": cfg.agy_bin},
+            content={
+                "status": "ok" if ok else "nenhum CLI disponível",
+                "provedor_padrao": cfg.provedor_padrao,
+                "providers": estado,
+            },
         )
+
+    async def _modelos(nome: str, p: CliProvider) -> list[str]:
+        em, ids = cache.get(nome, (0.0, []))
+        if ids and time.monotonic() - em <= CACHE_MODELOS_S:
+            return ids
+        try:
+            ids = await p.modelos()
+            cache[nome] = (time.monotonic(), ids)
+        except Exception as err:  # pylint: disable=broad-except
+            logger.warning("%s: listar modelos falhou: %s", nome, err)
+            ids = ids or list(p.cfg.modelos)
+        return ids
 
     @app.get("/v1/models", dependencies=[Depends(autenticar)])
     async def models():
-        if time.monotonic() - cache["em"] > CACHE_MODELOS_S or not cache["ids"]:
-            try:
-                cache["ids"] = await agy.modelos()
-                cache["em"] = time.monotonic()
-            except Exception as err:  # pylint: disable=broad-except
-                logger.warning("agy models falhou: %s", err)
-        ids = cache["ids"] or [cfg.modelo_padrao]
-        return {
-            "object": "list",
-            "data": [{"id": i, "object": "model", "created": 0, "owned_by": "agy"} for i in ids],
-        }
+        data = []
+        for nome, p in provedores.items():
+            if not p.disponivel():
+                continue
+            for i in await _modelos(nome, p):
+                data.append({"id": f"{nome}/{i}", "object": "model", "created": 0, "owned_by": nome})
+        return {"object": "list", "data": data}
 
     @app.post("/v1/chat/completions", dependencies=[Depends(autenticar)])
     async def chat_completions(req: ChatCompletionRequest):
@@ -93,6 +116,7 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
             # Ex.: comentário colado no valor do .env. O agy responderia "modelo não
             # reconhecido", que a API trata como transitório e repetiria por minutos.
             raise HTTPException(status_code=400, detail=f"Nome de modelo inválido: {modelo[:80]!r}")
+        provedor, modelo_cli = resolver(modelo)
         rf = req.response_format or {}
         tipo_rf = rf.get("type")
         json_mode = tipo_rf in ("json_object", "json_schema")
@@ -105,15 +129,14 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
         # JSON inválido: mais uma chamada antes de desistir.
         for tentativa in range(2 if json_mode else 1):
             try:
-                res = await agy.executar(prompt, modelo, schema)
-            except AgyErro as err:
+                res = await provedor.executar(prompt, modelo_cli, schema)
+            except ErroCli as err:
                 logger.warning(
                     "chat model=%s status=%d %.1fs: %s",
                     modelo, err.status_http, time.monotonic() - inicio, err.mensagem,
                 )
-                return _erro_openai(err.status_http, err.mensagem)
-            e, s = _uso(res.usage)
-            entrada, saida = entrada + e, saida + s
+                return _erro_openai(err.status_http, err.mensagem, provedor.ESPERA_COTA_S)
+            entrada, saida = entrada + res.entrada, saida + res.saida
             texto = res.texto
             if not json_mode:
                 break
