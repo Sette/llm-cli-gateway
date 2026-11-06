@@ -1,0 +1,32 @@
+[project]
+name = "agy-openai-api"
+version = "0.1.0"
+description = "API compatível com a OpenAI (chat/completions) sobre o Antigravity CLI (agy)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.7",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+agy-openai-api = "agy_openai_api.main:run"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "openai>=1.40",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agy_openai_api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
