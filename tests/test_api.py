@@ -1,46 +1,69 @@
 import json
-import os
 import stat
 import sys
+import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from agy_openai_api.config import Config
-from agy_openai_api.main import create_app
-from agy_openai_api.prompt import extrair_json, montar
+from llm_cli_gateway import config as config_mod
+from llm_cli_gateway.config import Config
+from llm_cli_gateway.main import create_app
+from llm_cli_gateway.prompt import extrair_json, montar
+from llm_cli_gateway.providers import CLASSES, ProviderConfig
 
-FAKE = Path(__file__).with_name("fake_agy.py")
+FAKE = Path(__file__).with_name("fake_cli.py")
+CLIS = list(CLASSES)
+
+
+@pytest.fixture(autouse=True)
+def sem_esperas(monkeypatch):
+    """As esperas de verdade (30 s, 60 s) só nos testes que as medem."""
+    for classe in CLASSES.values():
+        monkeypatch.setattr(classe, "ESPERA_COTA_S", 0.0)
+        monkeypatch.setattr(classe, "ESPERA_TRANSITORIO_S", 0.0)
 
 
 @pytest.fixture
-def fake_bin(tmp_path):
-    # Wrapper executável que roda o fake com o mesmo Python dos testes.
-    wrapper = tmp_path / "agy"
-    wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" "$@"\n')
-    wrapper.chmod(wrapper.stat().st_mode | stat.S_IEXEC)
-    return str(wrapper)
+def bins(tmp_path):
+    """Um executável falso por CLI, que roda o fake com o mesmo Python dos testes."""
+    caminhos = {}
+    for cli in CLIS:
+        wrapper = tmp_path / f"fake-{cli}"
+        wrapper.write_text(f'#!/bin/sh\nFAKE_CLI={cli} exec "{sys.executable}" "{FAKE}" "$@"\n')
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IEXEC)
+        caminhos[cli] = str(wrapper)
+    return caminhos
 
 
 @pytest.fixture
 def log(tmp_path, monkeypatch):
     caminho = tmp_path / "chamadas.jsonl"
-    monkeypatch.setenv("FAKE_AGY_LOG", str(caminho))
+    monkeypatch.setenv("FAKE_CLI_LOG", str(caminho))
     return caminho
 
 
-def _client(fake_bin, api_key=None, timeout_s=30.0):
-    cfg = Config(
-        agy_bin=fake_bin,
+def _cfg(bins, api_key=None, timeout_s=30.0, **por_cli):
+    """``por_cli``: ``{"agy": {"intervalo_s": 0.3}}`` etc."""
+    return Config(
+        providers={
+            cli: ProviderConfig(
+                bin=bins[cli],
+                timeout_s=timeout_s,
+                modelos=(f"{cli}-m1", f"{cli}-m2"),
+                **por_cli.get(cli, {}),
+            )
+            for cli in CLIS
+        },
         api_key=api_key,
-        concorrencia=2,
-        timeout_s=timeout_s,
         modelo_padrao="modelo-a",
-        host="127.0.0.1",
         port=0,
     )
-    return TestClient(create_app(cfg))
+
+
+def _client(bins, **kw):
+    return TestClient(create_app(_cfg(bins, **kw)))
 
 
 def _chamadas(log):
@@ -59,101 +82,96 @@ CORPO = {
 }
 
 
-def test_chat_ok(fake_bin, log, monkeypatch):
-    monkeypatch.setenv("FAKE_AGY_MODE", "ok")
-    r = _client(fake_bin).post("/v1/chat/completions", json=CORPO)
+# --- agy (sem prefixo: o provedor padrão) ------------------------------------------
+
+
+def test_chat_ok(bins, log, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
+    r = _client(bins).post("/v1/chat/completions", json=CORPO)
     assert r.status_code == 200, r.text
     d = r.json()
     assert json.loads(d["choices"][0]["message"]["content"]) == {"resumo": "ok"}
     assert d["model"] == "gemini-x-low"
     assert d["usage"] == {"prompt_tokens": 120, "completion_tokens": 15, "total_tokens": 135}
-    args = _chamadas(log)[0]["args"]
+    chamada = _chamadas(log)[0]
+    assert chamada["cli"] == "agy"
+    args = chamada["args"]
     assert args[args.index("--model") + 1] == "gemini-x-low"
     assert "--sandbox" in args and "--disable-slash-commands" in args
     prompt = args[args.index("-p") + 1]
     assert prompt.startswith("Você é um redator.")
     assert '{"faixa": "Em Risco"}' in prompt and "SOMENTE com um objeto JSON" in prompt
     # Roda num diretório temporário vazio.
-    assert Path(_chamadas(log)[0]["cwd"]).name.startswith("agy-api-")
+    assert Path(chamada["cwd"]).name.startswith("llm-cli-")
+    assert chamada["arquivos"] == {}
 
 
-def test_sdk_openai(fake_bin, monkeypatch):
+def test_prefixo_agy_igual_sem_prefixo(bins, log, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
+    r = _client(bins).post("/v1/chat/completions", json={**CORPO, "model": "agy/gemini-x-low"})
+    assert r.status_code == 200 and r.json()["model"] == "agy/gemini-x-low"
+    args = _chamadas(log)[0]["args"]
+    assert args[args.index("--model") + 1] == "gemini-x-low"
+
+
+def test_sdk_openai(bins, monkeypatch):
     """Mesmo uso do ClienteLLM do health score."""
     from openai import OpenAI
 
-    monkeypatch.setenv("FAKE_AGY_MODE", "ok")
-    tc = _client(fake_bin, api_key="segredo")
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
+    tc = _client(bins, api_key="segredo")
     client = OpenAI(base_url="http://testserver/v1", api_key="segredo", http_client=tc)
-    resp = client.chat.completions.create(
-        model="gemini-x-low",
-        temperature=0,
-        response_format={"type": "json_object"},
-        messages=CORPO["messages"],
-        extra_body={"metadata": {"tipo": "cliente"}},
-    )
-    assert json.loads(resp.choices[0].message.content) == {"resumo": "ok"}
-    assert resp.usage.prompt_tokens == 120
+    for modelo, entrada in (("gemini-x-low", 120), ("claude/haiku", 102), ("codex/gpt-x", 300)):
+        resp = client.chat.completions.create(
+            model=modelo,
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=CORPO["messages"],
+            extra_body={"metadata": {"tipo": "cliente"}},
+        )
+        assert json.loads(resp.choices[0].message.content) == {"resumo": "ok"}
+        assert resp.usage.prompt_tokens == entrada
 
 
-def test_texto_sem_json_mode(fake_bin, monkeypatch):
-    monkeypatch.setenv("FAKE_AGY_MODE", "texto")
+def test_texto_sem_json_mode(bins, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "texto")
     corpo = {k: v for k, v in CORPO.items() if k != "response_format"}
-    r = _client(fake_bin).post("/v1/chat/completions", json=corpo)
+    r = _client(bins).post("/v1/chat/completions", json=corpo)
     assert r.json()["choices"][0]["message"]["content"] == "olá"
 
 
-def test_cerca_markdown(fake_bin, monkeypatch):
-    monkeypatch.setenv("FAKE_AGY_MODE", "cerca")
-    r = _client(fake_bin).post("/v1/chat/completions", json=CORPO)
-    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"resumo": "cercado"}
-
-
-def test_json_invalido_refaz_uma_vez(fake_bin, log, tmp_path, monkeypatch):
-    monkeypatch.setenv("FAKE_AGY_MODE", "invalido_uma_vez")
-    monkeypatch.setenv("FAKE_AGY_CONTADOR", str(tmp_path / "n"))
-    r = _client(fake_bin).post("/v1/chat/completions", json=CORPO)
+def test_json_invalido_refaz_uma_vez(bins, log, tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "invalido_uma_vez")
+    monkeypatch.setenv("FAKE_CLI_CONTADOR", str(tmp_path / "n"))
+    r = _client(bins).post("/v1/chat/completions", json=CORPO)
     assert r.status_code == 200
     assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"resumo": "segunda"}
     assert r.json()["usage"]["prompt_tokens"] == 240  # soma as duas chamadas
     assert len(_chamadas(log)) == 2
 
 
-def test_json_invalido_duas_vezes(fake_bin, log, monkeypatch):
-    monkeypatch.setenv("FAKE_AGY_MODE", "invalido")
-    r = _client(fake_bin).post("/v1/chat/completions", json=CORPO)
+def test_json_invalido_duas_vezes(bins, log, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "invalido")
+    r = _client(bins).post("/v1/chat/completions", json=CORPO)
     assert r.status_code == 502
     assert len(_chamadas(log)) == 2
 
 
-def test_timeout(fake_bin, monkeypatch):
-    monkeypatch.setenv("FAKE_AGY_MODE", "lento")
-    from agy_openai_api.agy import Agy
-
-    monkeypatch.setattr(Agy, "FOLGA_S", 0.0)
-    r = _client(fake_bin, timeout_s=1).post("/v1/chat/completions", json=CORPO)
+def test_timeout(bins, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "lento")
+    monkeypatch.setattr(CLASSES["agy"], "FOLGA_S", 0.0)
+    r = _client(bins, timeout_s=1).post("/v1/chat/completions", json=CORPO)
     assert r.status_code == 504
 
 
-@pytest.mark.parametrize("modo,status", [("falha", 502), ("cota", 429), ("lixo", 502)])
-def test_erros(fake_bin, monkeypatch, modo, status):
-    from agy_openai_api.agy import Agy
-
-    monkeypatch.setattr(Agy, "ESPERA_COTA_S", 0.0)
-    monkeypatch.setattr(Agy, "ESPERA_TRANSITORIO_S", 0.0)
-    monkeypatch.setenv("FAKE_AGY_MODE", modo)
-    r = _client(fake_bin).post("/v1/chat/completions", json=CORPO)
-    assert r.status_code == status
-    assert "error" in r.json()
-
-
-def test_agy_ausente():
-    r = _client("/nao/existe/agy").post("/v1/chat/completions", json=CORPO)
+def test_cli_ausente(bins):
+    r = _client({**bins, "agy": "/nao/existe/agy"}).post("/v1/chat/completions", json=CORPO)
     assert r.status_code == 503
 
 
-def test_auth(fake_bin, monkeypatch):
-    monkeypatch.setenv("FAKE_AGY_MODE", "ok")
-    c = _client(fake_bin, api_key="segredo")
+def test_auth(bins, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
+    c = _client(bins, api_key="segredo")
     assert c.post("/v1/chat/completions", json=CORPO).status_code == 401
     errado = {"Authorization": "Bearer outro"}
     assert c.post("/v1/chat/completions", json=CORPO, headers=errado).status_code == 401
@@ -161,25 +179,206 @@ def test_auth(fake_bin, monkeypatch):
     assert c.post("/v1/chat/completions", json=CORPO, headers=certo).status_code == 200
 
 
-def test_stream_recusado(fake_bin):
-    r = _client(fake_bin).post("/v1/chat/completions", json={**CORPO, "stream": True})
+def test_stream_recusado(bins):
+    r = _client(bins).post("/v1/chat/completions", json={**CORPO, "stream": True})
     assert r.status_code == 400
 
 
-def test_models_e_health(fake_bin):
-    c = _client(fake_bin)
-    ids = [m["id"] for m in c.get("/v1/models").json()["data"]]
-    assert ids == ["modelo-a", "modelo-b"]
-    assert c.get("/health").status_code == 200
-
-
-def test_json_schema_vai_para_flag(fake_bin, log, monkeypatch):
-    monkeypatch.setenv("FAKE_AGY_MODE", "ok")
+def test_json_schema_vai_para_flag(bins, log, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
     schema = {"type": "object", "properties": {"resumo": {"type": "string"}}}
     corpo = {**CORPO, "response_format": {"type": "json_schema", "json_schema": {"name": "x", "schema": schema}}}
-    assert _client(fake_bin).post("/v1/chat/completions", json=corpo).status_code == 200
+    assert _client(bins).post("/v1/chat/completions", json=corpo).status_code == 200
     args = _chamadas(log)[0]["args"]
     assert json.loads(args[args.index("--json-schema") + 1]) == schema
+
+
+def test_modelo_nao_reconhecido_e_transitorio(bins, log, tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "modelo_transitorio")
+    monkeypatch.setenv("FAKE_CLI_CONTADOR", str(tmp_path / "n"))
+    r = _client(bins).post("/v1/chat/completions", json=CORPO)
+    assert r.status_code == 200 and len(_chamadas(log)) == 2
+
+
+def test_intervalo_entre_processos(bins, log, monkeypatch):
+    client = _client(bins, agy={"concorrencia": 4, "intervalo_s": 0.3})
+    inicio = time.monotonic()
+    for _ in range(3):
+        assert client.post("/v1/chat/completions", json=CORPO).status_code == 200
+    assert time.monotonic() - inicio >= 0.6
+
+
+def test_cota_pausa_e_devolve_retry_after(bins, log, monkeypatch):
+    monkeypatch.setattr(CLASSES["agy"], "ESPERA_COTA_S", 0.2)
+    monkeypatch.setenv("FAKE_CLI_MODE", "cota")
+    inicio = time.monotonic()
+    r = _client(bins).post("/v1/chat/completions", json=CORPO)
+    assert r.status_code == 429 and r.headers["retry-after"] == "0"
+    # tentativas=2 (padrão do ProviderConfig): 3 processos, com duas pausas de 0,2 s
+    assert len(_chamadas(log)) == 3 and time.monotonic() - inicio >= 0.4
+
+
+def test_modelo_com_lixo_e_recusado_na_hora(bins, log):
+    corpo = {**CORPO, "model": "gemini-x-low# comentário do .env"}
+    r = _client(bins).post("/v1/chat/completions", json=corpo)
+    assert r.status_code == 400 and not log.exists()
+
+
+# --- roteamento e os outros CLIs ----------------------------------------------------
+
+
+def test_prefixo_desconhecido(bins, log):
+    r = _client(bins).post("/v1/chat/completions", json={**CORPO, "model": "gemini/x"})
+    assert r.status_code == 400 and "claude/<modelo>" in r.json()["error"]["message"]
+    assert not log.exists()
+
+
+def test_provedor_desligado(bins, log):
+    r = _client(bins, claude={"ativo": False}).post(
+        "/v1/chat/completions", json={**CORPO, "model": "claude/haiku"}
+    )
+    assert r.status_code == 503 and not log.exists()
+
+
+def test_claude(bins, log, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
+    r = _client(bins).post("/v1/chat/completions", json={**CORPO, "model": "claude/haiku"})
+    assert r.status_code == 200, r.text
+    assert r.json()["usage"] == {"prompt_tokens": 102, "completion_tokens": 7, "total_tokens": 109}
+    chamada = _chamadas(log)[0]
+    assert chamada["cli"] == "claude"
+    args = chamada["args"]
+    assert args[args.index("--model") + 1] == "haiku"
+    assert args[args.index("--tools") + 1] == ""
+    assert args[args.index("--setting-sources") + 1] == ""
+    assert "-p" in args and "--no-session-persistence" in args and "--strict-mcp-config" in args
+    # O prompt vai pelo stdin, não pelo argv.
+    assert "SOMENTE com um objeto JSON" in chamada["stdin"]
+    assert not any("Em Risco" in a for a in args)
+
+
+def test_claude_structured_output(bins):
+    from llm_cli_gateway.providers.claude import ClaudeProvider
+
+    p = ClaudeProvider(ProviderConfig(bin=bins["claude"]))
+    out = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                      "result": "texto livre", "structured_output": {"a": 1}, "usage": {}})
+    assert p.interpretar(0, out, "").texto == '{"a": 1}'
+
+
+def test_codex(bins, log, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
+    schema = {"type": "object", "properties": {"resumo": {"type": "string"}}}
+    corpo = {**CORPO, "model": "codex/gpt-x",
+             "response_format": {"type": "json_schema", "json_schema": {"name": "x", "schema": schema}}}
+    r = _client(bins).post("/v1/chat/completions", json=corpo)
+    assert r.status_code == 200, r.text
+    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"resumo": "ok"}
+    # cached_input_tokens já está dentro de input_tokens.
+    assert r.json()["usage"] == {"prompt_tokens": 300, "completion_tokens": 9, "total_tokens": 309}
+    chamada = _chamadas(log)[0]
+    args = chamada["args"]
+    assert args[:2] == ["exec", "--json"] and args[-1] == "-"
+    assert args[args.index("--sandbox") + 1] == "read-only"
+    assert args[args.index("-m") + 1] == "gpt-x"
+    assert "--ephemeral" in args and "--skip-git-repo-check" in args and "--ignore-rules" in args
+    assert "SOMENTE com um objeto JSON" in chamada["stdin"]
+    # O schema vai num arquivo do cwd temporário, que some depois.
+    nome = args[args.index("--output-schema") + 1]
+    assert json.loads(chamada["arquivos"][nome]) == schema
+    assert not Path(chamada["cwd"]).exists()
+
+
+def test_kiro(bins, log, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "ok")
+    r = _client(bins).post("/v1/chat/completions", json={**CORPO, "model": "kiro/claude-haiku-4.5"})
+    assert r.status_code == 200, r.text
+    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"resumo": "ok"}
+    assert r.json()["usage"]["total_tokens"] == 0
+    args = _chamadas(log)[0]["args"]
+    assert args[:2] == ["chat", "--no-interactive"] and "--trust-tools=" in args
+    assert args[args.index("--model") + 1] == "claude-haiku-4.5"
+    assert args[-2] == "--" and "SOMENTE com um objeto JSON" in args[-1]
+
+
+def test_kiro_texto_sem_ansi(bins, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "texto")
+    corpo = {k: v for k, v in CORPO.items() if k != "response_format"}
+    r = _client(bins).post("/v1/chat/completions", json={**corpo, "model": "kiro/auto"})
+    assert r.json()["choices"][0]["message"]["content"] == "olá"
+
+
+@pytest.mark.parametrize("cli", CLIS)
+@pytest.mark.parametrize("modo,status", [("falha", 502), ("cota", 429), ("lixo", 502)])
+def test_erros(bins, monkeypatch, cli, modo, status):
+    monkeypatch.setenv("FAKE_CLI_MODE", modo)
+    r = _client(bins).post("/v1/chat/completions", json={**CORPO, "model": f"{cli}/m"})
+    assert r.status_code == status, r.text
+    assert "error" in r.json()
+
+
+@pytest.mark.parametrize(
+    "cli,mensagem",
+    [
+        ("claude", "There's an issue with the selected model (x). It may not exist"),
+        ("codex", "The 'x' model is not supported. model_not_found"),
+        ("kiro", "Model 'x' does not exist. Available models: auto, glm-5"),
+    ],
+)
+def test_modelo_inexistente_404(bins, cli, mensagem):
+    err = CLASSES[cli](ProviderConfig(bin=bins[cli])).erro(mensagem)
+    assert err.status_http == 404 and not err.transitorio
+
+
+def test_erro_do_kiro_traz_a_mensagem(bins, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "falha")
+    r = _client(bins).post("/v1/chat/completions", json={**CORPO, "model": "kiro/m"})
+    mensagem = r.json()["error"]["message"]
+    assert "error: deu ruim" in mensagem and "WARNING" not in mensagem and "\x1b" not in mensagem
+
+
+def test_models_e_health(bins):
+    c = _client(bins, kiro={"ativo": False})
+    ids = [m["id"] for m in c.get("/v1/models").json()["data"]]
+    assert ids == ["agy/modelo-a", "agy/modelo-b", "claude/claude-m1", "claude/claude-m2",
+                   "codex/codex-m1", "codex/codex-m2"]
+    h = c.get("/health")
+    assert h.status_code == 200
+    assert h.json()["providers"] == {"agy": True, "claude": True, "codex": True, "kiro": False}
+
+
+def test_health_sem_nenhum_cli(bins):
+    c = _client({cli: f"/nao/existe/{cli}" for cli in CLIS})
+    assert c.get("/health").status_code == 503
+
+
+# --- configuração -------------------------------------------------------------------
+
+
+def test_config_nomes_antigos_do_agy(monkeypatch):
+    for var in ("API_KEY", "MODELO_PADRAO"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("AGY_API_KEY", "velha")
+    monkeypatch.setenv("AGY_MODELO_PADRAO", "gemini-velho")
+    cfg = config_mod.load()
+    assert cfg.api_key == "velha" and cfg.modelo_padrao == "gemini-velho"
+    monkeypatch.setenv("API_KEY", "nova")
+    assert config_mod.load().api_key == "nova"
+
+
+def test_config_por_cli(monkeypatch):
+    monkeypatch.setenv("CLAUDE_BIN", "/opt/claude")
+    monkeypatch.setenv("CLAUDE_ATIVO", "0")
+    monkeypatch.setenv("CODEX_MODELOS", "a, b")
+    monkeypatch.setenv("KIRO_CONCORRENCIA", "5")
+    p = config_mod.load().providers
+    assert p["claude"].bin == "/opt/claude" and not p["claude"].ativo
+    assert p["codex"].modelos == ("a", "b")
+    assert p["kiro"].concorrencia == 5 and p["kiro"].bin == "kiro-cli"
+    assert p["agy"].intervalo_s == 5.0 and p["agy"].tentativas == 3
+
+
+# --- prompt -------------------------------------------------------------------------
 
 
 def test_nova_tentativa_vira_transcricao():
@@ -203,6 +402,12 @@ def test_conteudo_em_partes():
     assert p == "a\nb"
 
 
+def test_cerca_markdown(bins, monkeypatch):
+    monkeypatch.setenv("FAKE_CLI_MODE", "cerca")
+    r = _client(bins).post("/v1/chat/completions", json=CORPO)
+    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"resumo": "cercado"}
+
+
 @pytest.mark.parametrize(
     "texto,esperado",
     [
@@ -215,48 +420,3 @@ def test_conteudo_em_partes():
 )
 def test_extrair_json(texto, esperado):
     assert extrair_json(texto) == esperado
-
-
-def test_modelo_nao_reconhecido_e_transitorio(fake_bin, log, tmp_path, monkeypatch):
-    from agy_openai_api.agy import Agy
-
-    monkeypatch.setattr(Agy, "ESPERA_TRANSITORIO_S", 0.0)
-    monkeypatch.setenv("FAKE_AGY_MODE", "modelo_transitorio")
-    monkeypatch.setenv("FAKE_AGY_CONTADOR", str(tmp_path / "n"))
-    r = _client(fake_bin).post("/v1/chat/completions", json=CORPO)
-    assert r.status_code == 200 and len(_chamadas(log)) == 2
-
-
-def test_intervalo_entre_processos(fake_bin, log, monkeypatch):
-    import time
-
-    cfg = Config(
-        agy_bin=fake_bin, api_key=None, concorrencia=4, timeout_s=30.0,
-        modelo_padrao="modelo-a", host="127.0.0.1", port=0, intervalo_s=0.3,
-    )
-    client = TestClient(create_app(cfg))
-    inicio = time.monotonic()
-    for _ in range(3):
-        assert client.post("/v1/chat/completions", json=CORPO).status_code == 200
-    assert time.monotonic() - inicio >= 0.6
-
-
-def test_cota_pausa_e_devolve_retry_after(fake_bin, log, monkeypatch):
-    from agy_openai_api.agy import Agy
-
-    monkeypatch.setattr(Agy, "ESPERA_COTA_S", 0.2)
-    monkeypatch.setattr(Agy, "ESPERA_TRANSITORIO_S", 0.0)
-    monkeypatch.setenv("FAKE_AGY_MODE", "cota")
-    import time
-
-    inicio = time.monotonic()
-    r = _client(fake_bin).post("/v1/chat/completions", json=CORPO)
-    assert r.status_code == 429 and r.headers["retry-after"] == "0"
-    # tentativas=2 (padrão do Config): 3 processos, com duas pausas de 0,2 s
-    assert len(_chamadas(log)) == 3 and time.monotonic() - inicio >= 0.4
-
-
-def test_modelo_com_lixo_e_recusado_na_hora(fake_bin, log):
-    corpo = {**CORPO, "model": "gemini-x-low# comentário do .env"}
-    r = _client(fake_bin).post("/v1/chat/completions", json=corpo)
-    assert r.status_code == 400 and not log.exists()
