@@ -1,16 +1,16 @@
 # CLAUDE.md — llm-cli-gateway
 
-API FastAPI compatível com a OpenAI (`/v1/chat/completions`, `/v1/models`) que repassa cada pedido a um CLI de agente: `agy`, `claude`, `codex` ou `kiro-cli`. O provedor sai do prefixo do modelo (`claude/sonnet`). Sem prefixo, vai para o `PROVEDOR_PADRAO` (`agy`). O README tem o uso e as variáveis. Antes se chamava `agy-openai-api`.
+FastAPI application compatible with OpenAI (`/v1/chat/completions`, `/v1/models`) that forwards each request to an agent CLI: `agy`, `claude`, `codex`, or `kiro-cli`. The provider is selected from the model prefix (`claude/sonnet`). Without a prefix, requests go to `PROVEDOR_PADRAO` (`agy`). See the README for usage and environment variables. The project was previously called `agy-openai-api`.
 
-É uma ferramenta de desenvolvimento local, para gastar as assinaturas dos CLIs em vez de API paga enquanto se desenvolve e testa. Não é para produção nem para expor na rede: não adicione recursos nessa direção (deploy, multiusuário, bind padrão fora de `127.0.0.1`).
+This is a local development tool for using CLI subscriptions instead of a paid API while developing and testing. It is not for production or network exposure: do not add deployment, multi-user, or default bind settings outside `127.0.0.1`.
 
-- `src/llm_cli_gateway/providers/base.py`: o que é comum aos CLIs. Subprocess assíncrono (sem shell, cwd temporário vazio, prompt por argv ou stdin), semáforo, intervalo entre processos, pausa de cota, novas tentativas, timeout e a classificação de erros para HTTP.
-- `providers/<cli>.py`: só `comando()` e `interpretar()` (mais `modelos()` no agy). O formato da saída de cada CLI está na docstring do módulo, medido numa versão. Mudou a versão do CLI? Confira se ainda bate.
-- CLI novo: um módulo em `providers/`, a entrada em `providers.CLASSES` e em `config.PADROES`, e o formato no `tests/fake_cli.py`.
-- `prompt.py`: transforma as mensagens num prompt único e extrai o JSON da resposta.
-- `main.py`: as rotas, o roteamento pelo prefixo, o refazer único para JSON inválido, o streaming emulado (`_sse`, resposta inteira num chunk) e a auth por Bearer opcional.
-- `config.py`: variáveis globais e `<CLI>_*`. `AGY_API_KEY` e `AGY_MODELO_PADRAO` seguem aceitos.
-- Isolamento é requisito: nenhum CLI pode ganhar ferramenta de escrita, shell ou acesso às settings, MCP e sessões do usuário.
-- Não logue o conteúdo de prompts ou respostas: os clientes mandam dados de negócio.
-- Testes: `uv run pytest`, com `tests/fake_cli.py` no lugar dos CLIs. Nunca chame um CLI real nos testes.
-- Primeiro cliente: os relatórios do `slb-health-score-package`, pelo provedor `litellm` (`LITELLM_API_BASE=http://127.0.0.1:8787/v1`).
+- `src/llm_cli_gateway/providers/base.py`: behavior shared by CLIs. Async subprocess (no shell, empty temporary cwd, prompt via argv or stdin), semaphore, process interval, quota pause, retries, timeout, and HTTP error classification.
+- `providers/<cli>.py`: only `command()` and `parse()` (plus `models()` in agy). Each module's docstring records the CLI output format measured for a specific version. When the CLI version changes, verify that the format still matches.
+- New CLI: add a module in `providers/`, register it in `providers.CLASSES` and `config.PADROES`, and add its output format to `tests/fake_cli.py`.
+- `prompt.py`: turns messages into a single prompt and extracts JSON from the response.
+- `main.py`: routes, prefix-based routing, one retry for invalid JSON, emulated streaming (`_sse`, full response in one chunk), and optional Bearer authentication.
+- `config.py`: global and `<CLI>_*` variables. `AGY_API_KEY` and `AGY_MODELO_PADRAO` remain supported.
+- Isolation is required: no CLI may receive write tools, a shell, or access to user settings, MCP, or sessions.
+- Never log prompt or response content: clients send business data.
+- Tests: `uv run pytest`, using `tests/fake_cli.py` in place of the CLIs. Never invoke a real CLI in tests.
+- First client: reports from `slb-health-score-package`, through the `litellm` provider (`LITELLM_API_BASE=http://127.0.0.1:8787/v1`).

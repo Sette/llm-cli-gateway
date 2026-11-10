@@ -1,29 +1,29 @@
 # llm-cli-gateway
 
-API compatível com a OpenAI (`POST /v1/chat/completions`) que roda **na sua máquina** e responde chamando um **CLI de agente** já instalado e logado nela: Antigravity (`agy`), Claude Code (`claude`), Codex (`codex`) ou Kiro (`kiro-cli`).
+An OpenAI-compatible API (`POST /v1/chat/completions`) that runs **on your machine** and responds by calling an installed and authenticated **agent CLI**: Antigravity (`agy`), Claude Code (`claude`), Codex (`codex`), or Kiro (`kiro-cli`).
 
-> **Ferramenta de desenvolvimento local.** O gateway existe para economizar durante o desenvolvimento: em vez de pagar por token numa API de LLM enquanto você escreve, testa e ajusta código que chama um modelo, você aponta esse código para `http://127.0.0.1:8787/v1` e usa os créditos e as assinaturas dos CLIs que já tem. Ele **não** é um serviço para produção, para ficar exposto na rede ou para ser compartilhado entre pessoas.
+> **Local development tool.** The gateway helps reduce development costs: instead of paying per token to an LLM API while writing, testing, and adjusting code that calls a model, point that code at `http://127.0.0.1:8787/v1` and use the credits and subscriptions you already have for the CLIs. It is **not** a production service, a network-facing service, or a shared service.
 
-## Para que serve
+## What it is for
 
-- Desenvolver e testar localmente código que já fala com a OpenAI ou com o LiteLLM (prompts, parsing de JSON, pipelines de relatório), sem mudar o cliente: só troque a URL base.
-- Rodar experimentos e comparações entre modelos (Gemini, Claude, GPT…) gastando as assinaturas dos CLIs, e não uma chave de API paga por uso.
-- Rodar lotes pequenos e médios de chamadas na própria máquina, como os relatórios.
+- Develop and test locally code that already speaks OpenAI or LiteLLM (prompts, JSON parsing, reporting pipelines) without changing the client: just change the base URL.
+- Run experiments and compare models (Gemini, Claude, GPT…) using CLI subscriptions instead of a paid API key.
+- Run small and medium batches of calls on your own machine, such as reports.
 
-## Uma API, vários clientes
+## One API, many clients
 
-O gateway fala o formato `chat/completions` da OpenAI, que é o padrão de fato do mercado. Então qualquer ferramenta que aceite um "provedor compatível com a OpenAI" com URL base própria passa a usar os CLIs da sua máquina, sem plugin nem adaptador:
+The gateway speaks the OpenAI `chat/completions` format, the de facto industry standard. Any tool that accepts an "OpenAI-compatible provider" with a custom base URL can use the CLIs on your machine without a plugin or adapter:
 
-- **SDKs:** `openai` (Python e JS), com `base_url="http://127.0.0.1:8787/v1"`.
-- **Frameworks:** LiteLLM (provedor `openai/` ou `litellm` com `api_base`), LangChain (`ChatOpenAI(base_url=...)`), LlamaIndex, DSPy, pydantic-ai e afins.
-- **Assistentes e agentes pessoais**, como o [OpenClaw](https://openclaw.ai), que aceita provedores personalizados.
-- **Scripts e `curl`**, para testar um prompt rápido.
+- **SDKs:** `openai` (Python and JS), with `base_url="http://127.0.0.1:8787/v1"`.
+- **Frameworks:** LiteLLM (the `openai/` provider or `litellm` with `api_base`), LangChain (`ChatOpenAI(base_url=...)`), LlamaIndex, DSPy, pydantic-ai, and similar tools.
+- **Personal assistants and agents**, such as [OpenClaw](https://openclaw.ai), which supports custom providers.
+- **Scripts and `curl`**, for quickly testing a prompt.
 
-E um único endpoint dá acesso a vários fornecedores: basta trocar o `model` (`agy/…`, `claude/…`, `codex/…`, `kiro/…`) para comparar Gemini, Claude e GPT no mesmo código.
+A single endpoint provides access to several providers: change `model` (`agy/…`, `claude/…`, `codex/…`, `kiro/…`) to compare Gemini, Claude, and GPT in the same code.
 
-### Exemplo: OpenClaw
+### Example: OpenClaw
 
-No `~/.openclaw/openclaw.json`, cadastre o gateway como provedor em `models.providers` e libere os modelos em `agents.defaults.models`. O esboço abaixo segue o formato de provedor personalizado do OpenClaw. Confira os nomes dos campos na documentação da versão que você usa:
+In `~/.openclaw/openclaw.json`, register the gateway as a provider in `models.providers` and enable the models in `agents.defaults.models`. The sketch below follows OpenClaw's custom provider format. Check the field names in the documentation for the version you use:
 
 ```json5
 {
@@ -31,7 +31,7 @@ No `~/.openclaw/openclaw.json`, cadastre o gateway como provedor em `models.prov
     providers: {
       "llm-cli-gateway": {
         baseUrl: "http://127.0.0.1:8787/v1",
-        apiKey: "<API_KEY, ou qualquer valor se ela estiver vazia>",
+        apiKey: "<API_KEY, or any value if it is empty>",
         api: "openai-completions",
         models: [
           { id: "claude/sonnet", name: "Claude Sonnet (via CLI)" },
@@ -48,121 +48,121 @@ No `~/.openclaw/openclaw.json`, cadastre o gateway como provedor em `models.prov
 }
 ```
 
-**Limites a conhecer antes de plugar um agente:**
+**Limitations to know before connecting an agent:**
 
-- **Streaming emulado.** `stream: true` funciona, mas a resposta chega inteira num chunk só, depois que o CLI termina. O cliente não vê o texto aparecendo aos poucos.
-- **Sem tool calling.** O campo `tools` é ignorado, então o modelo nunca devolve `tool_calls`. Isso basta para conversa, resumo, classificação e respostas em JSON. Mas um agente que dependa de ferramentas (rodar comandos, navegar, editar arquivos) não consegue executá-las por este provedor.
+- **Emulated streaming.** `stream: true` works, but the full response arrives in one chunk after the CLI finishes. The client does not see text appear gradually.
+- **No tool calling.** The `tools` field is ignored, so the model never returns `tool_calls`. This is enough for conversation, summarization, classification, and JSON responses. An agent that relies on tools (running commands, browsing, editing files) cannot use them through this provider.
 
-## Para que não serve
+## What it is not for
 
-- **Produção.** Cada chamada abre um processo do CLI (segundos de latência, ~3–11 mil tokens de system prompt do agente por chamada), o streaming é só emulado, e os parâmetros de amostragem (`temperature`, `max_tokens`…) são ignorados. Em produção, use a API do fornecedor ou o LiteLLM da plataforma.
-- **Servidor compartilhado.** As chamadas saem pela conta logada na máquina de quem roda o gateway. Por isso ele escuta em `127.0.0.1` por padrão. Não exponha a porta na rede nem o coloque atrás de um proxy público, mesmo com `API_KEY`.
-- **Substituto de API key.** Os termos de uso de cada fornecedor limitam o que se pode fazer com uma assinatura. Use o gateway para o seu próprio trabalho de desenvolvimento e confira os termos do CLI que for usar.
+- **Production.** Each call starts a CLI process (seconds of latency and ~3–11k tokens of agent system prompt per call), streaming is emulated, and sampling parameters (`temperature`, `max_tokens`…) are ignored. Use the provider's API or hosted LiteLLM in production.
+- **Shared servers.** Calls use the account logged in on the machine running the gateway. It therefore listens on `127.0.0.1` by default. Do not expose the port on a network or put it behind a public proxy, even with `API_KEY`.
+- **Replacing an API key.** Each provider's terms of use limit what you can do with a subscription. Use the gateway for your own development work and check the terms for the CLI you use.
 
-## Pré-requisitos
+## Requirements
 
-- Python 3.12+ e [uv](https://docs.astral.sh/uv/).
-- Ao menos um dos CLIs instalado, no `PATH` e logado na sua conta: `agy`, `claude`, `codex` ou `kiro-cli`. O gateway não faz login nem guarda credenciais: usa a sessão que o CLI já tem.
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+- At least one CLI installed, available on `PATH`, and logged into your account: `agy`, `claude`, `codex`, or `kiro-cli`. The gateway does not log in or store credentials; it uses the session already held by the CLI.
 
-## Roteamento pelo modelo
+## Model routing
 
-O CLI sai do prefixo do modelo:
+The CLI is selected from the model prefix:
 
-| `model` | CLI chamado | modelo passado ao CLI |
+| `model` | CLI called | Model passed to the CLI |
 |---|---|---|
 | `agy/gemini-3.7-flash-low` | `agy` | `gemini-3.7-flash-low` |
 | `claude/sonnet` | `claude` | `sonnet` |
 | `codex/gpt-5.6-luna` | `codex` | `gpt-5.6-luna` |
 | `kiro/claude-haiku-4.5` | `kiro-cli` | `claude-haiku-4.5` |
-| `gemini-3.7-flash-low` (sem prefixo) | `PROVEDOR_PADRAO` (`agy`) | `gemini-3.7-flash-low` |
+| `gemini-3.7-flash-low` (no prefix) | `PROVEDOR_PADRAO` (`agy`) | `gemini-3.7-flash-low` |
 
-Antes se chamava `agy-openai-api`. Modelo sem prefixo continua indo para o `agy`, e as variáveis `AGY_API_KEY` e `AGY_MODELO_PADRAO` continuam valendo, então os clientes antigos não precisam mudar.
+The project was previously called `agy-openai-api`. Models without a prefix still use `agy`, and `AGY_API_KEY` and `AGY_MODELO_PADRAO` remain supported, so existing clients do not need to change.
 
-## Como subir
+## Start the server
 
 ```bash
 uv sync
-cp .env.example .env   # opcional
+cp .env.example .env   # optional
 uv run llm-cli-gateway  # http://127.0.0.1:8787
 ```
 
-A partir daí, qualquer cliente da OpenAI funciona com `base_url="http://127.0.0.1:8787/v1"`.
+Any OpenAI client can now use `base_url="http://127.0.0.1:8787/v1"`.
 
-Cada CLI precisa estar instalado e logado: confira com `agy models`, `claude -p oi`, `codex exec oi` e `kiro-cli chat --no-interactive oi`. O `GET /health` mostra quais estão disponíveis. A API lê o `.env` da raiz do projeto ao subir. Uma variável já exportada no shell ganha do `.env`.
+Each CLI must be installed and logged in. Check with `agy models`, `claude -p hi`, `codex exec hi`, and `kiro-cli chat --no-interactive hi`. `GET /health` shows which ones are available. The API reads the project's root `.env` file on startup. Variables already exported in the shell take precedence over `.env`.
 
-### Variáveis globais
+### Global variables
 
-| Variável | Padrão | O que é |
+| Variable | Default | Description |
 |---|---|---|
-| `API_KEY` | (vazia) | se definida, exige `Authorization: Bearer <chave>`. Aceita `AGY_API_KEY` como nome antigo |
-| `PROVEDOR_PADRAO` | `agy` | para onde vai um `model` sem prefixo |
-| `MODELO_PADRAO` | `agy/gemini-3.7-flash-low` | quando o pedido não traz `model`. Aceita `AGY_MODELO_PADRAO` |
-| `HOST` / `PORT` | `127.0.0.1` / `8787` | onde escutar. Mantenha `127.0.0.1`: o gateway é para uso local |
+| `API_KEY` | (empty) | If set, requires `Authorization: Bearer <key>`. Also accepts the legacy name `AGY_API_KEY`. |
+| `PROVEDOR_PADRAO` | `agy` | Provider used for a `model` without a prefix. |
+| `MODELO_PADRAO` | `agy/gemini-3.7-flash-low` | Used when a request has no `model`. Also accepts `AGY_MODELO_PADRAO`. |
+| `HOST` / `PORT` | `127.0.0.1` / `8787` | Listening address. Keep `127.0.0.1`: the gateway is for local use. |
 
-### Variáveis por CLI
+### Per-CLI variables
 
-Prefixo `AGY_`, `CLAUDE_`, `CODEX_` ou `KIRO_`:
+Prefixes: `AGY_`, `CLAUDE_`, `CODEX_`, or `KIRO_`:
 
-| Sufixo | Padrão | O que é |
+| Suffix | Default | Description |
 |---|---|---|
-| `_BIN` | `agy`, `claude`, `codex`, `kiro-cli` | executável |
-| `_ATIVO` | `1` | `0` desliga o CLI (503 nas chamadas, fora do `/v1/models`) |
-| `_CONCORRENCIA` | `2` | processos em paralelo, por CLI |
-| `_INTERVALO_S` | `5` no agy, `0` nos outros | segundos, no mínimo, entre o início de dois processos |
-| `_TENTATIVAS` | `3` no agy, `2` nos outros | novas tentativas em erro transitório ou cota (ver abaixo) |
-| `_TIMEOUT_S` | `180` | tempo máximo por chamada (o processo morre 15 s depois) |
-| `_MODELOS` | ver `config.py` | lista do `/v1/models`, separada por vírgula. No agy, só vale se o `agy models` falhar |
+| `_BIN` | `agy`, `claude`, `codex`, `kiro-cli` | Executable. |
+| `_ATIVO` | `1` | Set to `0` to disable the CLI (requests return 503; it is omitted from `/v1/models`). |
+| `_CONCORRENCIA` | `2` | Parallel processes per CLI. |
+| `_INTERVALO_S` | `5` for agy, `0` for others | Minimum seconds between starting processes. |
+| `_TENTATIVAS` | `3` for agy, `2` for others | Retries for transient errors or quota errors (see below). |
+| `_TIMEOUT_S` | `180` | Maximum time per call (the process is killed 15 seconds later). |
+| `_MODELOS` | See `config.py` | Comma-separated list for `/v1/models`. For agy, used only if `agy models` fails. |
 
 ## Endpoints
 
 - `POST /v1/chat/completions`:
-  - aceita `model` (ver a tabela acima), `messages` e `response_format` (`json_object` ou `json_schema`);
-  - aceita e ignora `temperature`, `max_tokens`, `metadata` e outros campos. Os CLIs não têm flags para eles;
-  - devolve `model` como veio no pedido;
-  - `stream: true` é emulado: o CLI responde tudo e o texto sai num único chunk SSE (`chat.completion.chunk`), seguido do `finish_reason` e do `data: [DONE]`. Com `stream_options.include_usage`, um último chunk traz o `usage`. Os erros saem antes do stream, com o status HTTP normal;
-  - não faz tool calling: `tools` e `tool_choice` são ignorados.
-- `GET /v1/models`: os modelos de cada CLI disponível, com o prefixo (`agy/…`, `claude/…`), e `owned_by` = CLI. O do agy vem do `agy models`, com cache de 10 minutos. Os dos outros vêm de `<CLI>_MODELOS`.
-- `GET /health`: `{"providers": {"agy": true, "claude": true, ...}}`. Responde 200 se ao menos um CLI estiver no PATH e ativo.
+  - accepts `model` (see the table above), `messages`, and `response_format` (`json_object` or `json_schema`);
+  - accepts and ignores `temperature`, `max_tokens`, `metadata`, and other fields. The CLIs have no flags for these;
+  - returns `model` as it was provided in the request;
+  - `stream: true` is emulated: the CLI returns the full response, which is sent in one SSE chunk (`chat.completion.chunk`), followed by `finish_reason` and `data: [DONE]`. With `stream_options.include_usage`, a final chunk contains `usage`. Errors are returned before streaming, with the normal HTTP status;
+  - does not support tool calling: `tools` and `tool_choice` are ignored.
+- `GET /v1/models`: models for each available CLI, with a prefix (`agy/…`, `claude/…`) and `owned_by` set to the CLI. The agy list comes from `agy models` and is cached for 10 minutes. Other lists come from `<CLI>_MODELOS`.
+- `GET /health`: `{"providers": {"agy": true, "claude": true, ...}}`. Returns 200 if at least one CLI is available on `PATH` and enabled.
 
-## Os CLIs
+## The CLIs
 
-Todos rodam sem shell, num diretório temporário vazio, sem ferramentas que escrevam e sem guardar sessão.
+All CLIs run without a shell, in an empty temporary directory, without write-capable tools or saved sessions.
 
-| CLI | Comando | Prompt | `usage` | `json_schema` |
+| CLI | Command | Prompt | `usage` | `json_schema` |
 |---|---|---|---|---|
-| agy | `agy -p … --sandbox --disable-slash-commands --output-format json` | argumento (até 120 kB) | `input + cache_read` / `output + thinking` | `--json-schema` |
-| claude | `claude -p --output-format json --tools "" --no-session-persistence --strict-mcp-config --setting-sources ""` | stdin | `input + cache_read + cache_creation` / `output` | `--json-schema` (usa o `structured_output`) |
-| codex | `codex exec --json --sandbox read-only --ephemeral --skip-git-repo-check --ignore-rules -` | stdin | `input_tokens` (já inclui o cache) / `output_tokens` | `--output-schema` (arquivo no cwd). O schema precisa ser estrito (`additionalProperties: false`, todos os campos em `required`) |
-| kiro | `kiro-cli chat --no-interactive --trust-tools= --wrap never -- …` | argumento (até 120 kB) | não informa (fica 0) | só a instrução no prompt |
+| agy | `agy -p … --sandbox --disable-slash-commands --output-format json` | Argument (up to 120 kB) | `input + cache_read` / `output + thinking` | `--json-schema` |
+| claude | `claude -p --output-format json --tools "" --no-session-persistence --strict-mcp-config --setting-sources ""` | stdin | `input + cache_read + cache_creation` / `output` | `--json-schema` (uses `structured_output`) |
+| codex | `codex exec --json --sandbox read-only --ephemeral --skip-git-repo-check --ignore-rules -` | stdin | `input_tokens` (includes cache) / `output_tokens` | `--output-schema` (file in cwd). The schema must be strict (`additionalProperties: false`, all fields in `required`). |
+| kiro | `kiro-cli chat --no-interactive --trust-tools= --wrap never -- …` | Argument (up to 120 kB) | Not reported (remains 0) | Prompt instruction only |
 
-Notas:
-- O `claude` não usa `--bare`, que exige `ANTHROPIC_API_KEY` e ignora o login da assinatura. Sem `--setting-sources`, os hooks, plugins e o CLAUDE.md do usuário ficam de fora.
-- A entrada inclui o system prompt do próprio agente em toda chamada: ~6,4 mil tokens no agy, ~3,4 mil no claude e ~11 mil no codex (medido em 2026-11-06).
+Notes:
+- Claude does not use `--bare`, which requires `ANTHROPIC_API_KEY` and ignores subscription login. Without `--setting-sources`, user hooks, plugins, and `CLAUDE.md` are excluded.
+- Each call includes the agent's own system prompt: ~6.4k tokens for agy, ~3.4k for Claude, and ~11k for Codex (measured on 2026-11-06).
 
-## Como funciona
+## How it works
 
-- **Prompt único.** Os CLIs recebem um prompt só. As mensagens `system` vão no topo. Uma conversa de uma mensagem vira o texto do usuário. Uma conversa mais longa vira uma transcrição (`### Usuário` / `### Assistente`).
-- **Modo JSON.** Com `response_format`, o prompt pede "SOMENTE JSON". Na resposta, a API tira as cercas markdown e extrai o primeiro objeto. Se não achar JSON válido, refaz a chamada uma vez e, se falhar de novo, devolve 502.
-- **Erros** no formato da OpenAI:
-  - 400: modelo com caracteres inválidos ou prefixo desconhecido;
-  - 401: chave errada;
-  - 404: o CLI não conhece o modelo;
-  - 413: prompt acima de 120 kB (agy e kiro, que recebem o prompt como argumento);
-  - 429: cota ou limite, com `Retry-After`, depois das `<CLI>_TENTATIVAS`. Ao receber 429, a API para de abrir processos daquele CLI por 60 s;
-  - 502: falha do CLI ou resposta sem JSON;
-  - 503: CLI não encontrado ou desligado, ou erro transitório nas `_TENTATIVAS` novas tentativas;
+- **Single prompt.** CLIs receive one prompt. `system` messages go at the top. A one-message conversation becomes the user text. Longer conversations become a transcript (`### User` / `### Assistant`).
+- **JSON mode.** With `response_format`, the prompt requests "JSON ONLY". In the response, the API removes Markdown fences and extracts the first object. If it cannot find valid JSON, it retries the call once and returns 502 if that also fails.
+- **Errors** use the OpenAI format:
+  - 400: model contains invalid characters or has an unknown prefix;
+  - 401: incorrect key;
+  - 404: the CLI does not recognize the model;
+  - 413: prompt exceeds 120 kB (agy and kiro receive the prompt as an argument);
+  - 429: quota or rate limit after `<CLI>_TENTATIVAS`, with `Retry-After`. On 429, the API stops starting processes for that CLI for 60 seconds;
+  - 502: CLI failure or response without JSON;
+  - 503: CLI missing or disabled, or a transient error after the configured retries;
   - 504: timeout.
 
-  O SDK da OpenAI repete sozinho os 429 e 5xx.
-- **Cota do agy.** Cada processo do `agy` gasta a cota "Management Requests per minute per user" do Google ao abrir. Por isso o agy abre no máximo um processo a cada `AGY_INTERVALO_S`. Com 8 processos abrindo juntos, alguns recusam um modelo válido ("model ... is not recognized"): a API trata isso como transitório e repete depois de 30, 60 e 120 s (medido em 2026-11-06).
-- **Log.** O log registra modelo, duração, tokens e status, nunca o conteúdo.
+  The OpenAI SDK retries 429 and 5xx responses automatically.
+- **agy quota.** Each agy process consumes Google's "Management Requests per minute per user" quota when it starts. Therefore agy starts at most one process per `AGY_INTERVALO_S`. When 8 processes start together, some may reject a valid model ("model ... is not recognized"); the API treats this as transient and retries after 30, 60, and 120 seconds (measured on 2026-11-06).
+- **Logging.** Logs include the model, duration, token counts, and status, never the content.
 
-Medido em 2026-11-06, por chamada: ~3–6 s no `agy/gemini-3.7-flash-low` e ~3 s no `claude/haiku`.
+Measured on 2026-11-06: ~3–6 seconds per call for `agy/gemini-3.7-flash-low` and ~3 seconds for `claude/haiku`.
 
-## Testes
+## Tests
 
 ```bash
 uv run pytest
 ```
 
-Os testes usam um CLI falso (`tests/fake_cli.py`, que imita a saída de cada um) e não chamam nenhum CLI real.
+Tests use a fake CLI (`tests/fake_cli.py`, which imitates each CLI's output) and do not call any real CLI.
