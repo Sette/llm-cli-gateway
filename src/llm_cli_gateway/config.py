@@ -1,9 +1,9 @@
-"""Configuração por variáveis de ambiente (lidas a cada uso, para os testes).
+"""Environment variable configuration (read on each use for testing).
 
 Globais: ``API_KEY``, ``PROVEDOR_PADRAO``, ``MODELO_PADRAO``, ``HOST``, ``PORT``.
 Por CLI (prefixo ``AGY_``, ``CLAUDE_``, ``CODEX_``, ``KIRO_``): ``_BIN``, ``_ATIVO``,
 ``_CONCORRENCIA``, ``_INTERVALO_S``, ``_TENTATIVAS``, ``_TIMEOUT_S``, ``_MODELOS``.
-``AGY_API_KEY`` e ``AGY_MODELO_PADRAO`` (nomes do agy-openai-api) seguem valendo.
+``AGY_API_KEY`` and ``AGY_MODELO_PADRAO`` (names from agy-openai-api) remain supported.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from .providers import ProviderConfig
 
-# Padrões de cada CLI. Os do agy vêm das medições de 2026-11-06 (cota por minuto).
+# Defaults for each CLI. agy values are based on measurements from 2026-11-06 (per-minute quota).
 PADROES: dict[str, dict] = {
     "agy": {
         "bin": "agy",
@@ -42,7 +42,7 @@ class Config:
 
 
 def _bool(valor: str) -> bool:
-    return valor.strip().lower() not in ("0", "false", "nao", "não", "no", "off", "")
+    return valor.strip().lower() not in ("0", "false", "no", "off", "")
 
 
 def _provider(nome: str) -> ProviderConfig:

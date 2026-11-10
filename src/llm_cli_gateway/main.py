@@ -1,7 +1,7 @@
-"""App FastAPI: /v1/chat/completions, /v1/models e /health sobre os CLIs de agente.
+"""FastAPI app: /v1/chat/completions, /v1/models, and /health over agent CLIs.
 
-O provedor sai do prefixo do modelo (``claude/sonnet``); sem prefixo, vai para o
-``PROVEDOR_PADRAO``.
+The provider is selected from the model prefix (``claude/sonnet``); without a prefix,
+requests use ``PROVEDOR_PADRAO``.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def _erro_openai(status: int, mensagem: str, retry_after: float | None = None) -
     tipo = {401: "authentication_error", 429: "rate_limit_error"}.get(status, "api_error")
     if status in (400, 404, 413):
         tipo = "invalid_request_error"
-    # O cliente (SDK da OpenAI, relatórios) espera o Retry-After antes de repetir.
+    # Clients (OpenAI SDK, reporting tools) wait for Retry-After before retrying.
     headers = {"Retry-After": str(int(retry_after or 0))} if status == 429 else None
     return JSONResponse(
         status_code=status,
@@ -46,10 +46,10 @@ def _erro_openai(status: int, mensagem: str, retry_after: float | None = None) -
 
 
 def _sse(id_: str, criado: int, modelo: str, texto: str, usage: Usage | None):
-    """Streaming emulado: o CLI já respondeu tudo, então o texto sai num chunk só.
+    """Emulated streaming: the CLI has already returned, so text is sent in one chunk.
 
-    Serve para clientes que só falam streaming (assistentes como o OpenClaw). Os
-    erros não passam por aqui: saem antes, com o status HTTP certo.
+    This supports clients that only speak streaming (assistants such as OpenClaw).
+    Errors are returned before this point with the appropriate HTTP status.
     """
 
     def chunk(delta: dict, fim: str | None = None, extra: dict | None = None) -> str:
@@ -66,7 +66,7 @@ def _sse(id_: str, criado: int, modelo: str, texto: str, usage: Usage | None):
     yield chunk({"role": "assistant", "content": texto})
     yield chunk({}, "stop")
     if usage is not None:
-        # Formato da OpenAI com stream_options.include_usage: chunk final sem choices.
+        # OpenAI format with stream_options.include_usage: final chunk without choices.
         corpo = {
             "id": id_, "object": "chat.completion.chunk", "created": criado,
             "model": modelo, "choices": [], "usage": usage.model_dump(),
@@ -86,7 +86,7 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
             return
         token = (authorization or "").removeprefix("Bearer ").strip()
         if not secrets.compare_digest(token, cfg.api_key):
-            raise HTTPException(status_code=401, detail="API key inválida.")
+            raise HTTPException(status_code=401, detail="Invalid API key.")
 
     @app.exception_handler(HTTPException)
     async def _http(_req, exc: HTTPException):
@@ -98,8 +98,8 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
         if provedor is None or not modelo_cli:
             raise HTTPException(
                 status_code=400,
-                detail=f"Provedor desconhecido em {modelo!r}. Use um de: "
-                + ", ".join(f"{p}/<modelo>" for p in provedores),
+                detail=f"Unknown provider in {modelo!r}. Use one of: "
+                + ", ".join(f"{p}/<model>" for p in provedores),
             )
         return provedor, modelo_cli
 
@@ -110,7 +110,7 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
         return JSONResponse(
             status_code=200 if ok else 503,
             content={
-                "status": "ok" if ok else "nenhum CLI disponível",
+                "status": "ok" if ok else "no CLI available",
                 "provedor_padrao": cfg.provedor_padrao,
                 "providers": estado,
             },
@@ -142,9 +142,9 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
     async def chat_completions(req: ChatCompletionRequest):
         modelo = req.model or cfg.modelo_padrao
         if not _MODELO_VALIDO.fullmatch(modelo):
-            # Ex.: comentário colado no valor do .env. O agy responderia "modelo não
-            # reconhecido", que a API trata como transitório e repetiria por minutos.
-            raise HTTPException(status_code=400, detail=f"Nome de modelo inválido: {modelo[:80]!r}")
+            # For example, a comment appended to a .env value. agy would return
+            # "model not recognized", treated as transient and retried for minutes.
+            raise HTTPException(status_code=400, detail=f"Invalid model name: {modelo[:80]!r}")
         provedor, modelo_cli = resolver(modelo)
         rf = req.response_format or {}
         tipo_rf = rf.get("type")
@@ -155,7 +155,7 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
         entrada = saida = 0
         inicio = time.monotonic()
         texto = ""
-        # JSON inválido: mais uma chamada antes de desistir.
+        # Retry once for invalid JSON before giving up.
         for tentativa in range(2 if json_mode else 1):
             try:
                 res = await provedor.executar(prompt, modelo_cli, schema)
@@ -173,10 +173,10 @@ def create_app(cfg: config_mod.Config | None = None) -> FastAPI:
             if extraido is not None:
                 texto = extraido
                 break
-            logger.info("chat model=%s: resposta sem JSON (tentativa %d)", modelo, tentativa + 1)
+            logger.info("chat model=%s: response contained no JSON (attempt %d)", modelo, tentativa + 1)
         else:
-            logger.warning("chat model=%s status=502: JSON inválido duas vezes", modelo)
-            return _erro_openai(502, f"Resposta sem JSON válido: {texto[:300]}")
+            logger.warning("chat model=%s status=502: invalid JSON twice", modelo)
+            return _erro_openai(502, f"Response contained no valid JSON: {texto[:300]}")
 
         logger.info(
             "chat model=%s status=200 %.1fs tokens=%d+%d",
@@ -211,7 +211,7 @@ def run() -> None:
     from dotenv import load_dotenv  # pylint: disable=import-outside-toplevel
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    # O .env da raiz do projeto; variável já exportada no shell ganha dele.
+    # Load .env from the project root; variables exported in the shell take precedence.
     load_dotenv(Path(__file__).resolve().parents[2] / ".env")
     cfg = config_mod.load()
     uvicorn.run(create_app(cfg), host=cfg.host, port=cfg.port, log_level="info")

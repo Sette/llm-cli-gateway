@@ -1,19 +1,19 @@
-"""Claude Code: ``claude -p`` com ``--output-format json`` e o prompt pelo stdin.
+"""Claude Code: ``claude -p`` with ``--output-format json`` and the prompt on stdin.
 
-Sem ferramentas (``--tools ""``), sem MCP, sem settings do usuário (hooks, plugins) e
-sem sessão gravada. Não usa ``--bare``, que exige ``ANTHROPIC_API_KEY`` e ignora o
-login OAuth da assinatura.
+No tools (``--tools ""``), MCP, user settings (hooks, plugins), or saved session.
+Does not use ``--bare``, which requires ``ANTHROPIC_API_KEY`` and ignores subscription
+OAuth login.
 
-Saída (medida em 2026-11-06, Claude Code 2.1.319), uma linha JSON::
+Output (measured on 2026-11-06, Claude Code 2.1.319), one JSON line::
 
     {"type": "result", "subtype": "success", "is_error": false, "result": "ok",
-     "structured_output": {...},            # só com --json-schema
+     "structured_output": {...},            # only with --json-schema
      "api_error_status": null, "num_turns": 1, "duration_ms": 1148,
      "usage": {"input_tokens": 2, "cache_creation_input_tokens": 2849,
                "cache_read_input_tokens": 649, "output_tokens": 4, ...}, ...}
 
-Modelo inexistente: rc=1, ``is_error: true``, ``api_error_status: 404`` e a mensagem
-em ``result``.
+Unknown model: rc=1, ``is_error: true``, ``api_error_status: 404``, with the message
+in ``result``.
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ class ClaudeProvider(CliProvider):
         ]
         if json_schema is not None:
             argv += ["--json-schema", json.dumps(json_schema, ensure_ascii=False)]
-        # Pelo stdin: o -p do claude é flag e o prompt seria posicional (um prompt que
-        # começa com "-" viraria opção); também não tem o limite de argumento do Linux.
+        # Use stdin: claude's -p is a flag and a positional prompt beginning with "-"
+        # would be treated as an option. This also avoids Linux's argument length limit.
         return Comando(argv, stdin=prompt)
 
     def interpretar(self, rc: int | None, out: str, err: str) -> Resultado:
@@ -61,7 +61,7 @@ class ClaudeProvider(CliProvider):
                 except ValueError:
                     continue
         if not isinstance(dados, dict):
-            raise self.erro(f"Saída do claude não é JSON (rc={rc}): {resumo(err or out)}")
+            raise self.erro(f"claude output is not JSON (rc={rc}): {resumo(err or out)}")
         if dados.get("is_error") or dados.get("subtype") not in (None, "success"):
             status = dados.get("api_error_status")
             mensagem = f"claude: {resumo(str(dados.get('result') or err or dados.get('subtype')))}"

@@ -1,4 +1,4 @@
-"""Os CLIs suportados. Um CLI novo é um módulo aqui mais a entrada em ``CLASSES``."""
+"""Supported CLIs. To add one, create a module here and register it in ``CLASSES``."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def construir(configs: dict[str, ProviderConfig]) -> dict[str, CliProvider]:
 
 
 def separar(modelo: str, padrao: str) -> tuple[str, str]:
-    """``"claude/sonnet"`` → ``("claude", "sonnet")``; sem prefixo, usa o provedor padrão."""
+    """``"claude/sonnet"`` → ``("claude", "sonnet")``; without a prefix, use the default provider."""
     if "/" in modelo:
         provedor, _, nome = modelo.partition("/")
         return provedor, nome

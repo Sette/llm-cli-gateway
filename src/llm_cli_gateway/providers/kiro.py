@@ -1,12 +1,12 @@
 """Kiro CLI: ``kiro-cli chat --no-interactive``.
 
-Nenhuma ferramenta confiável (``--trust-tools=``), então o agente não executa nada
-sem aprovação, e no modo não interativo ninguém aprova.
+No trusted tools (``--trust-tools=``), so the agent cannot execute anything without
+approval, and nobody can approve actions in non-interactive mode.
 
-Saída (medida em 2026-11-06, kiro-cli 1.27.3): o stdout é texto com cores ANSI e o
-prompt ``> `` na frente da resposta (``\\x1b[38;5;141m> \\x1b[0mok``). O stderr traz
-avisos e os créditos gastos (``▸ Credits: 0.04 • Time: 1s``). Não há contagem de
-tokens nem schema nativo: o modo JSON depende só da instrução no prompt.
+Output (measured on 2026-11-06, kiro-cli 1.27.3): stdout is text with ANSI colors and
+the ``> `` prompt before the response (``\\x1b[38;5;141m> \\x1b[0mok``). Stderr contains
+warnings and credits used (``▸ Credits: 0.04 • Time: 1s``). There are no token counts
+or native schema support: JSON mode relies only on the prompt instruction.
 
 Modelo inexistente: rc=1 e ``error: Model 'x' does not exist. Available models: ...``
 no stderr.
@@ -33,7 +33,7 @@ class KiroProvider(CliProvider):
                 "never",
                 "--model",
                 modelo,
-                # "--": um prompt que começa com "-" não vira opção.
+                # "--": a prompt beginning with "-" is not treated as an option.
                 "--",
                 prompt,
             ]

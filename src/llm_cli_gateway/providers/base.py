@@ -1,7 +1,7 @@
-"""O que é comum a todos os CLIs: subprocess, ritmo, novas tentativas, timeout e erros.
+"""Behavior shared by all CLIs: subprocesses, pacing, retries, timeouts, and errors.
 
-Cada CLI é uma subclasse de :class:`CliProvider` que só diz como montar o comando
-(:meth:`comando`) e como ler a saída (:meth:`interpretar`).
+Each CLI is a :class:`CliProvider` subclass that defines how to build the command
+(:meth:`comando`) and parse its output (:meth:`interpretar`).
 """
 
 from __future__ import annotations
@@ -18,13 +18,13 @@ from pathlib import Path
 
 logger = logging.getLogger("llm_cli_gateway")
 
-# Um argumento no Linux tem no máximo 128 KiB (MAX_ARG_STRLEN).
+# A Linux argument can be at most 128 KiB (MAX_ARG_STRLEN).
 MAX_PROMPT_BYTES = 120_000
 _COTA = re.compile(
     r"quota|rate.?limit|resource.?exhausted|too many requests|usage limit|\b429\b", re.I
 )
-# Modelo que o CLI não conhece (claude, codex, kiro): 404, como a OpenAI. O agy
-# recusa modelo válido por engano e trata isso antes, como transitório.
+# Unknown model (claude, codex, kiro): 404, as with OpenAI. agy sometimes rejects
+# a valid model by mistake; that case is handled separately as transient.
 _MODELO_INEXISTENTE = re.compile(
     r"model_not_found|issue with the selected model|model '[^']*' does not exist", re.I
 )
@@ -42,7 +42,7 @@ class ErroCli(Exception):
 @dataclass
 class Resultado:
     texto: str
-    # Já normalizado: entrada = prompt (com cache), saída = resposta (com raciocínio).
+    # Normalized: input = prompt (including cache), output = response (including reasoning).
     entrada: int = 0
     saida: int = 0
     duracao_s: float = 0.0
@@ -52,7 +52,7 @@ class Resultado:
 class Comando:
     argv: list[str]
     stdin: str | None = None
-    # Arquivos que o comando lê (ex.: o schema do codex), criados no cwd temporário.
+    # Files read by the command (e.g. the Codex schema), created in the temporary cwd.
     arquivos: dict[str, str] = field(default_factory=dict)
 
 
@@ -64,7 +64,7 @@ class ProviderConfig:
     timeout_s: float = 180.0
     intervalo_s: float = 0.0
     tentativas: int = 2
-    # Lista fixa para o /v1/models (o agy lista pelo próprio CLI).
+    # Fixed list for /v1/models (agy lists models through its own CLI).
     modelos: tuple[str, ...] = ()
 
 
@@ -79,13 +79,13 @@ def sem_ansi(texto: str) -> str:
 
 class CliProvider:
     nome = ""
-    # Folga sobre o timeout do próprio CLI antes de matar o processo.
+    # Grace period beyond the CLI's own timeout before killing the process.
     FOLGA_S = 15.0
-    # Espera antes de repetir um erro transitório (dobra a cada tentativa).
+    # Wait before retrying a transient error (doubles on each attempt).
     ESPERA_TRANSITORIO_S = 30.0
-    # Cota: a pausa vale para todos os processos deste CLI, não só para o pedido que falhou.
+    # Quota pause applies to all processes for this CLI, not just the failed request.
     ESPERA_COTA_S = 60.0
-    # O prompt vai como argumento? Então vale o limite do Linux.
+    # When the prompt is passed as an argument, the Linux argument limit applies.
     PROMPT_NO_ARGV = True
     TRANSITORIO: re.Pattern | None = None
 
@@ -95,7 +95,7 @@ class CliProvider:
         self._ritmo = asyncio.Lock()
         self._proximo = 0.0
 
-    # --- o que cada CLI implementa -------------------------------------------------
+    # --- implemented by each CLI ---------------------------------------------------
 
     def comando(self, prompt: str, modelo: str, json_schema: dict | None) -> Comando:
         raise NotImplementedError
@@ -112,8 +112,8 @@ class CliProvider:
         return self.cfg.ativo and shutil.which(self.cfg.bin) is not None
 
     def erro(self, mensagem: str) -> ErroCli:
-        """Classifica a falha: transitório (503), modelo inexistente (404), cota (429) ou
-        falha (502)."""
+        """Classify the failure: transient (503), unknown model (404), quota (429), or
+        general failure (502)."""
         if self.TRANSITORIO is not None and self.TRANSITORIO.search(mensagem):
             return ErroCli(503, mensagem, transitorio=True)
         if _MODELO_INEXISTENTE.search(mensagem):
@@ -123,7 +123,7 @@ class CliProvider:
         return ErroCli(502, mensagem)
 
     async def _aguardar_vez(self) -> None:
-        """Intervalo mínimo entre o início de dois processos (e a pausa da cota)."""
+        """Minimum interval between process starts (also used for quota pauses)."""
         async with self._ritmo:
             agora = time.monotonic()
             inicio = max(agora, self._proximo)
@@ -132,7 +132,7 @@ class CliProvider:
             await asyncio.sleep(inicio - agora)
 
     async def _pausar(self, segundos: float) -> None:
-        """Nenhum processo novo deste CLI abre nos próximos ``segundos``."""
+        """Do not start another process for this CLI for ``seconds``."""
         async with self._ritmo:
             self._proximo = max(self._proximo, time.monotonic() + segundos)
 
@@ -142,7 +142,7 @@ class CliProvider:
         if not self.cfg.ativo:
             raise ErroCli(503, f"Provedor {self.nome} desligado ({self.nome.upper()}_ATIVO=0).")
         if self.PROMPT_NO_ARGV and len(prompt.encode()) > MAX_PROMPT_BYTES:
-            raise ErroCli(413, f"Prompt com mais de {MAX_PROMPT_BYTES} bytes.")
+            raise ErroCli(413, f"Prompt exceeds {MAX_PROMPT_BYTES} bytes.")
         cmd = self.comando(prompt, modelo, json_schema)
         for n in range(self.cfg.tentativas + 1):
             try:
@@ -157,17 +157,17 @@ class CliProvider:
                 logger.info(
                     "%s: %s, nova tentativa em %.0f s (%d/%d): %s",
                     self.nome,
-                    "cota" if err.status_http == 429 else "erro transitório",
+                    "quota" if err.status_http == 429 else "transient error",
                     espera, n + 1, self.cfg.tentativas, resumo(err.mensagem, 200),
                 )
-        raise AssertionError("inalcançável")
+        raise AssertionError("unreachable")
 
     async def _executar(self, cmd: Comando) -> Resultado:
         async with self._sem:
             await self._aguardar_vez()
-            # Diretório vazio: o agente não tem arquivo nenhum para ler ou mexer.
+            # Empty directory: the agent has no files to read or modify.
             with tempfile.TemporaryDirectory(prefix="llm-cli-") as cwd:
-                # Os arquivos ficam no cwd: o comando os cita pelo caminho relativo.
+                # Files are in cwd, so the command refers to them by relative path.
                 for nome, conteudo in cmd.arquivos.items():
                     Path(cwd, nome).write_text(conteudo, encoding="utf-8")
                 try:
@@ -180,7 +180,7 @@ class CliProvider:
                         env={**os.environ, "NO_COLOR": "1"},
                     )
                 except FileNotFoundError as err:
-                    raise ErroCli(503, f"{self.nome} não encontrado: {self.cfg.bin}") from err
+                    raise ErroCli(503, f"{self.nome} not found: {self.cfg.bin}") from err
                 entrada = cmd.stdin.encode() if cmd.stdin is not None else None
                 try:
                     out, err = await asyncio.wait_for(

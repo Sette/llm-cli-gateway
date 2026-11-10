@@ -1,1 +1,1 @@
-"""Gateway compatível com a OpenAI sobre CLIs de agente (agy, claude, codex, kiro)."""
+"""OpenAI-compatible gateway over agent CLIs (agy, claude, codex, and kiro)."""

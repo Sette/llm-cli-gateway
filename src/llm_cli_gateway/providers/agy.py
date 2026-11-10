@@ -1,6 +1,6 @@
-"""Antigravity CLI: ``agy -p`` (print mode) com ``--output-format json``.
+"""Antigravity CLI: ``agy -p`` (print mode) with ``--output-format json``.
 
-Saída de sucesso (medida em 2026-11-06, agy 1.5.2)::
+Successful output (measured on 2026-11-06, agy 1.5.2)::
 
     {"conversation_id": "...", "status": "SUCCESS", "response": "...",
      "duration_seconds": 3.9, "num_turns": 1,
@@ -19,13 +19,13 @@ from .base import CliProvider, Comando, ErroCli, Resultado, resumo
 
 class AgyProvider(CliProvider):
     nome = "agy"
-    # A cota do Google é por minuto, e sem ela o agy nem carrega a lista de modelos:
-    # esperar menos de um minuto só gasta mais cota. Cada processo do agy gasta a cota
-    # "Management Requests per minute per user" ao abrir.
+    # Google's quota is per minute, and without quota agy cannot load the model list:
+    # waiting less than a minute only consumes more quota. Each agy process consumes
+    # the "Management Requests per minute per user" quota when it starts.
     ESPERA_TRANSITORIO_S = 30.0
     ESPERA_COTA_S = 60.0
-    # Com vários agy abrindo juntos, alguns não carregam a lista de modelos e recusam um
-    # modelo que funciona (medido em 2026-11-06, 8 em paralelo). Passa ao tentar de novo.
+    # When several agy processes start together, some fail to load the model list and
+    # reject a valid model (measured on 2026-11-06, 8 in parallel). A retry succeeds.
     TRANSITORIO = re.compile(r"not recognized as a known model|invalid model selection", re.I)
 
     def comando(self, prompt: str, modelo: str, json_schema: dict | None) -> Comando:
@@ -47,7 +47,7 @@ class AgyProvider(CliProvider):
         return Comando(argv)
 
     def interpretar(self, rc: int | None, out: str, err: str) -> Resultado:
-        # A saída pode ter avisos antes do JSON (ex.: "warning: ...").
+        # Output may contain warnings before the JSON (e.g. "warning: ...").
         dados = None
         for linha in reversed(out.strip().splitlines()):
             linha = linha.strip()
@@ -63,7 +63,7 @@ class AgyProvider(CliProvider):
             except ValueError:
                 dados = None
         if not isinstance(dados, dict):
-            raise self.erro(f"Saída do agy não é JSON (rc={rc}): {resumo(err or out)}")
+            raise self.erro(f"agy output is not JSON (rc={rc}): {resumo(err or out)}")
         status = str(dados.get("status", ""))
         if status.upper() == "TIMEOUT":
             raise ErroCli(504, "agy: print-timeout atingido.")

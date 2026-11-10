@@ -15,15 +15,15 @@ class Message(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    # metadata, extra_body, top_p etc. são aceitos e ignorados.
+    # metadata, extra_body, top_p, and similar fields are accepted and ignored.
     model_config = ConfigDict(extra="allow")
 
     model: str | None = None
     messages: list[Message]
-    temperature: float | None = None  # o agy não tem flag: ignorada
-    max_tokens: int | None = None  # idem
+    temperature: float | None = None  # agy has no corresponding flag; ignored
+    max_tokens: int | None = None  # likewise
     response_format: dict[str, Any] | None = None
-    stream: bool = False  # emulado: a resposta inteira sai num chunk só
+    stream: bool = False  # emulated: the entire response is sent in one chunk
     stream_options: dict[str, Any] | None = None
 
 

@@ -1,9 +1,9 @@
-"""Codex CLI: ``codex exec --json``, com o prompt pelo stdin (sem limite de argumento).
+"""Codex CLI: ``codex exec --json``, with the prompt on stdin (no argument size limit).
 
-Sandbox ``read-only`` num diretório vazio, sem sessão gravada e sem as regras de
-execpolicy do usuário. O schema vai num arquivo do cwd (``--output-schema``).
+``read-only`` sandbox in an empty directory, without a saved session or the user's
+execpolicy rules. The schema is written to a file in cwd (``--output-schema``).
 
-Saída (medida em 2026-11-06, codex-cli 0.163.0), JSONL::
+Output (measured on 2026-11-06, codex-cli 0.163.0), JSONL::
 
     {"type": "thread.started", "thread_id": "..."}
     {"type": "turn.started"}
@@ -11,10 +11,10 @@ Saída (medida em 2026-11-06, codex-cli 0.163.0), JSONL::
     {"type": "turn.completed", "usage": {"input_tokens": 13290, "cached_input_tokens": 10880,
      "cache_write_input_tokens": 0, "output_tokens": 5, "reasoning_output_tokens": 0}}
 
-Falha: rc=1, eventos ``{"type": "error", "message": "..."}`` e
-``{"type": "turn.failed", "error": {"message": "..."}}``; a mensagem pode ser um JSON
-da API (``"status": 400``, ``"code": "model_not_found"``). Avisos chegam como
-``item.completed`` do tipo ``error`` e não interrompem.
+Failure: rc=1, events ``{"type": "error", "message": "..."}`` and
+``{"type": "turn.failed", "error": {"message": "..."}}``; the message may be API JSON
+an API error (``"status": 400``, ``"code": "model_not_found"``). Warnings arrive as
+``item.completed`` events of type ``error`` and do not interrupt execution.
 """
 
 from __future__ import annotations
@@ -79,18 +79,18 @@ class CodexProvider(CliProvider):
                 falha = ev.get("message") or "error"
         if falha is not None or texto is None:
             if falha is None:
-                falha = f"sem resposta (rc={rc}, {eventos} eventos): {err or out}"
+                falha = f"no response (rc={rc}, {eventos} events): {err or out}"
             raise self.erro(f"codex: {resumo(_mensagem_api(falha))}")
         return Resultado(
             texto=texto,
-            # cached_input_tokens já está dentro de input_tokens (convenção da OpenAI).
+            # cached_input_tokens is already included in input_tokens (OpenAI convention).
             entrada=int(usage.get("input_tokens") or 0),
             saida=int(usage.get("output_tokens") or 0),
         )
 
 
 def _mensagem_api(mensagem: str) -> str:
-    """O erro da API vem como JSON dentro da mensagem: mantém status e texto."""
+    """The API error is JSON inside the message; preserve its status and text."""
     try:
         dados = json.loads(mensagem)
     except (ValueError, TypeError):
