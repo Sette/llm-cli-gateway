@@ -8,7 +8,7 @@ API compatível com a OpenAI (`POST /v1/chat/completions`) que roda **na sua má
 
 - Desenvolver e testar localmente código que já fala com a OpenAI ou com o LiteLLM (prompts, parsing de JSON, pipelines de relatório), sem mudar o cliente: só troque a URL base.
 - Rodar experimentos e comparações entre modelos (Gemini, Claude, GPT…) gastando as assinaturas dos CLIs, e não uma chave de API paga por uso.
-- Rodar lotes pequenos e médios de chamadas na própria máquina, como os relatórios do health score em dev.
+- Rodar lotes pequenos e médios de chamadas na própria máquina, como os relatórios.
 
 ## Uma API, vários clientes
 
@@ -158,28 +158,6 @@ Notas:
 - **Log.** O log registra modelo, duração, tokens e status, nunca o conteúdo.
 
 Medido em 2026-11-06, por chamada: ~3–6 s no `agy/gemini-3.7-flash-low` e ~3 s no `claude/haiku`.
-
-## Uso no health score (relatórios)
-
-No `.env` do `slb-health-score-package`:
-
-```bash
-RELATORIOS_LLM=1
-RELATORIOS_LLM_PROVEDOR=litellm
-LITELLM_API_BASE=http://127.0.0.1:8787/v1
-LITELLM_API_KEY=<API_KEY, ou qualquer valor se ela estiver vazia>
-LITELLM_MODEL_NAME=agy/gemini-3.7-flash-low   # ou claude/haiku, codex/gpt-5.6-luna...
-```
-
-O modelo entra no `fatos_hash`, então grave os experimentos no dev:
-
-```bash
-uv run --extra relatorios python -m health_score.relatorios \
-  --origem sld-ai-health-score-dev.health_score_results \
-  --destino sld-ai-health-score-dev.health_score_results_dev --limite 50 --gravar
-```
-
-**Atenção:** a entrada dos relatórios não leva cnpj, nome nem e-mail, mas leva dados de uso e risco dos clientes. Cada CLI os envia ao seu fornecedor pela conta logada na máquina: Google (agy), Anthropic (claude), OpenAI (codex) e AWS (kiro, que ainda pode rotear para outros modelos, como DeepSeek, GLM e Qwen). Use só onde isso for permitido.
 
 ## Testes
 
