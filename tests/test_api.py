@@ -19,7 +19,7 @@ CLIS = list(CLASSES)
 
 @pytest.fixture(autouse=True)
 def sem_esperas(monkeypatch):
-    """As esperas de verdade (30 s, 60 s) só nos testes que as medem."""
+    """Use real waits (30 s, 60 s) only in tests that measure them."""
     for classe in CLASSES.values():
         monkeypatch.setattr(classe, "ESPERA_COTA_S", 0.0)
         monkeypatch.setattr(classe, "ESPERA_TRANSITORIO_S", 0.0)
@@ -27,7 +27,7 @@ def sem_esperas(monkeypatch):
 
 @pytest.fixture
 def bins(tmp_path):
-    """Um executável falso por CLI, que roda o fake com o mesmo Python dos testes."""
+    """A fake executable per CLI, running the fake with the test Python interpreter."""
     caminhos = {}
     for cli in CLIS:
         wrapper = tmp_path / f"fake-{cli}"
@@ -75,14 +75,14 @@ CORPO = {
     "temperature": 0,
     "response_format": {"type": "json_object"},
     "messages": [
-        {"role": "system", "content": "Você é um redator."},
-        {"role": "user", "content": '{"faixa": "Em Risco"}'},
+        {"role": "system", "content": "You are a writer."},
+        {"role": "user", "content": '{"tier": "At Risk"}'},
     ],
     "metadata": {"tags": ["x"]},
 }
 
 
-# --- agy (sem prefixo: o provedor padrão) ------------------------------------------
+# --- agy (no prefix: default provider) ---------------------------------------------
 
 
 def test_chat_ok(bins, log, monkeypatch):
@@ -99,9 +99,9 @@ def test_chat_ok(bins, log, monkeypatch):
     assert args[args.index("--model") + 1] == "gemini-x-low"
     assert "--sandbox" in args and "--disable-slash-commands" in args
     prompt = args[args.index("-p") + 1]
-    assert prompt.startswith("Você é um redator.")
-    assert '{"faixa": "Em Risco"}' in prompt and "SOMENTE com um objeto JSON" in prompt
-    # Roda num diretório temporário vazio.
+    assert prompt.startswith("You are a writer.")
+    assert '{"tier": "At Risk"}' in prompt and "ONLY a valid JSON object" in prompt
+    # Runs in an empty temporary directory.
     assert Path(chamada["cwd"]).name.startswith("llm-cli-")
     assert chamada["arquivos"] == {}
 
@@ -137,7 +137,7 @@ def test_texto_sem_json_mode(bins, monkeypatch):
     monkeypatch.setenv("FAKE_CLI_MODE", "texto")
     corpo = {k: v for k, v in CORPO.items() if k != "response_format"}
     r = _client(bins).post("/v1/chat/completions", json=corpo)
-    assert r.json()["choices"][0]["message"]["content"] == "olá"
+    assert r.json()["choices"][0]["message"]["content"] == "hello"
 
 
 def test_json_invalido_refaz_uma_vez(bins, log, tmp_path, monkeypatch):
@@ -255,12 +255,12 @@ def test_cota_pausa_e_devolve_retry_after(bins, log, monkeypatch):
     inicio = time.monotonic()
     r = _client(bins).post("/v1/chat/completions", json=CORPO)
     assert r.status_code == 429 and r.headers["retry-after"] == "0"
-    # tentativas=2 (padrão do ProviderConfig): 3 processos, com duas pausas de 0,2 s
+    # retries=2 (ProviderConfig default): 3 processes, with two 0.2-second waits
     assert len(_chamadas(log)) == 3 and time.monotonic() - inicio >= 0.4
 
 
 def test_modelo_com_lixo_e_recusado_na_hora(bins, log):
-    corpo = {**CORPO, "model": "gemini-x-low# comentário do .env"}
+    corpo = {**CORPO, "model": "gemini-x-low# .env comment"}
     r = _client(bins).post("/v1/chat/completions", json=corpo)
     assert r.status_code == 400 and not log.exists()
 
@@ -270,7 +270,7 @@ def test_modelo_com_lixo_e_recusado_na_hora(bins, log):
 
 def test_prefixo_desconhecido(bins, log):
     r = _client(bins).post("/v1/chat/completions", json={**CORPO, "model": "gemini/x"})
-    assert r.status_code == 400 and "claude/<modelo>" in r.json()["error"]["message"]
+    assert r.status_code == 400 and "claude/<model>" in r.json()["error"]["message"]
     assert not log.exists()
 
 
@@ -293,8 +293,8 @@ def test_claude(bins, log, monkeypatch):
     assert args[args.index("--tools") + 1] == ""
     assert args[args.index("--setting-sources") + 1] == ""
     assert "-p" in args and "--no-session-persistence" in args and "--strict-mcp-config" in args
-    # O prompt vai pelo stdin, não pelo argv.
-    assert "SOMENTE com um objeto JSON" in chamada["stdin"]
+    # The prompt is passed through stdin, not argv.
+    assert "ONLY a valid JSON object" in chamada["stdin"]
     assert not any("Em Risco" in a for a in args)
 
 
@@ -315,7 +315,7 @@ def test_codex(bins, log, monkeypatch):
     r = _client(bins).post("/v1/chat/completions", json=corpo)
     assert r.status_code == 200, r.text
     assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"resumo": "ok"}
-    # cached_input_tokens já está dentro de input_tokens.
+    # cached_input_tokens is already included in input_tokens.
     assert r.json()["usage"] == {"prompt_tokens": 300, "completion_tokens": 9, "total_tokens": 309}
     chamada = _chamadas(log)[0]
     args = chamada["args"]
@@ -323,8 +323,8 @@ def test_codex(bins, log, monkeypatch):
     assert args[args.index("--sandbox") + 1] == "read-only"
     assert args[args.index("-m") + 1] == "gpt-x"
     assert "--ephemeral" in args and "--skip-git-repo-check" in args and "--ignore-rules" in args
-    assert "SOMENTE com um objeto JSON" in chamada["stdin"]
-    # O schema vai num arquivo do cwd temporário, que some depois.
+    assert "ONLY a valid JSON object" in chamada["stdin"]
+    # The schema is written to a temporary cwd file that is removed afterward.
     nome = args[args.index("--output-schema") + 1]
     assert json.loads(chamada["arquivos"][nome]) == schema
     assert not Path(chamada["cwd"]).exists()
@@ -339,14 +339,14 @@ def test_kiro(bins, log, monkeypatch):
     args = _chamadas(log)[0]["args"]
     assert args[:2] == ["chat", "--no-interactive"] and "--trust-tools=" in args
     assert args[args.index("--model") + 1] == "claude-haiku-4.5"
-    assert args[-2] == "--" and "SOMENTE com um objeto JSON" in args[-1]
+    assert args[-2] == "--" and "ONLY a valid JSON object" in args[-1]
 
 
 def test_kiro_texto_sem_ansi(bins, monkeypatch):
     monkeypatch.setenv("FAKE_CLI_MODE", "texto")
     corpo = {k: v for k, v in CORPO.items() if k != "response_format"}
     r = _client(bins).post("/v1/chat/completions", json={**corpo, "model": "kiro/auto"})
-    assert r.json()["choices"][0]["message"]["content"] == "olá"
+    assert r.json()["choices"][0]["message"]["content"] == "hello"
 
 
 @pytest.mark.parametrize("cli", CLIS)
@@ -375,13 +375,13 @@ def test_erro_do_kiro_traz_a_mensagem(bins, monkeypatch):
     monkeypatch.setenv("FAKE_CLI_MODE", "falha")
     r = _client(bins).post("/v1/chat/completions", json={**CORPO, "model": "kiro/m"})
     mensagem = r.json()["error"]["message"]
-    assert "error: deu ruim" in mensagem and "WARNING" not in mensagem and "\x1b" not in mensagem
+    assert "error: something went wrong" in mensagem and "WARNING" not in mensagem and "\x1b" not in mensagem
 
 
 def test_models_e_health(bins):
     c = _client(bins, kiro={"ativo": False})
     ids = [m["id"] for m in c.get("/v1/models").json()["data"]]
-    assert ids == ["agy/modelo-a", "agy/modelo-b", "claude/claude-m1", "claude/claude-m2",
+    assert ids == ["agy/model-a", "agy/model-b", "claude/claude-m1", "claude/claude-m2",
                    "codex/codex-m1", "codex/codex-m2"]
     h = c.get("/health")
     assert h.status_code == 200
@@ -393,7 +393,7 @@ def test_health_sem_nenhum_cli(bins):
     assert c.get("/health").status_code == 503
 
 
-# --- configuração -------------------------------------------------------------------
+# --- configuration -----------------------------------------------------------------
 
 
 def test_config_nomes_antigos_do_agy(monkeypatch):
@@ -423,19 +423,19 @@ def test_config_por_cli(monkeypatch):
 
 
 def test_nova_tentativa_vira_transcricao():
-    """Mensagens extras do pipeline (resposta recusada + correção)."""
+    """Additional pipeline messages (refusal and correction)."""
     p = montar(
         [
             {"role": "system", "content": "SYS"},
             {"role": "user", "content": "entrada"},
             {"role": "assistant", "content": '{"resumo": "tem 12"}'},
-            {"role": "user", "content": "Tire os números."},
+            {"role": "user", "content": "Remove the numbers."},
         ],
         json_mode=True,
     )
     assert p.startswith("SYS")
-    assert p.index("### Usuário\nentrada") < p.index("### Assistente\n{") < p.index("### Usuário\nTire")
-    assert "Responda à última mensagem do Usuário." in p
+    assert p.index("### User\ninput") < p.index("### Assistant\n{") < p.index("### User\nRemove")
+    assert "Respond to the last User message." in p
 
 
 def test_conteudo_em_partes():

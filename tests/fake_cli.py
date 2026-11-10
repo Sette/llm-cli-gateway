@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""CLI falso para os testes: imita o agy, o claude, o codex ou o kiro (FAKE_CLI).
+"""Fake CLI for tests: imitates agy, claude, codex, or kiro (FAKE_CLI).
 
-O comportamento vem de FAKE_CLI_MODE; cada chamada é anexada (JSON por linha) em
-FAKE_CLI_LOG, com argumentos, cwd, stdin e os arquivos do cwd.
+Behavior is controlled by FAKE_CLI_MODE; each call is appended (one JSON object per
+line) to FAKE_CLI_LOG, with arguments, cwd, stdin, and files in cwd.
 """
 
 import json
@@ -22,8 +22,8 @@ if log:
 
 if cli == "agy" and args[:1] == ["models"]:
     print("Fetching available models...")
-    print("modelo-a\tModelo A")
-    print("modelo-b\tModelo B")
+    print("model-a\tModel A")
+    print("model-b\tModel B")
     sys.exit(0)
 
 mode = os.environ.get("FAKE_CLI_MODE", "ok")
@@ -38,7 +38,7 @@ def contar():
 
 def sucesso(resposta):
     if cli == "agy":
-        print("warning: algo sem importância", file=sys.stderr)
+        print("warning: an unimportant message", file=sys.stderr)
         usage = {"input_tokens": 100, "output_tokens": 10, "thinking_tokens": 5, "cache_read_tokens": 20}
         print(json.dumps({"status": "SUCCESS", "response": resposta, "duration_seconds": 0.1, "usage": usage}))
     elif cli == "claude":
@@ -48,7 +48,7 @@ def sucesso(resposta):
     elif cli == "codex":
         print(json.dumps({"type": "thread.started", "thread_id": "t"}))
         print(json.dumps({"type": "turn.started"}))
-        print(json.dumps({"type": "item.completed", "item": {"id": "i0", "type": "error", "message": "aviso"}}))
+        print(json.dumps({"type": "item.completed", "item": {"id": "i0", "type": "error", "message": "warning"}}))
         print(json.dumps({"type": "item.completed", "item": {"id": "i1", "type": "agent_message", "text": resposta}}))
         print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 300, "cached_input_tokens": 200, "output_tokens": 9}}))
     elif cli == "kiro":
@@ -71,33 +71,33 @@ def falha(mensagem, status=None):
         print(json.dumps({"type": "turn.failed", "error": {"message": corpo}}))
         sys.exit(1)
     elif cli == "kiro":
-        print("\x1b[33mWARNING: \x1b[0maviso", file=sys.stderr)
+        print("\x1b[33mWARNING: \x1b[0mwarning", file=sys.stderr)
         print(f"error: {mensagem}", file=sys.stderr)
         sys.exit(1)
 
 
 if mode == "ok":
-    sucesso('{"resumo": "ok"}\n')
+    sucesso('{"summary": "ok"}\n')
 elif mode == "texto":
-    sucesso("olá")
+    sucesso("hello")
 elif mode == "cerca":
-    sucesso('Aqui está:\n```json\n{"resumo": "cercado"}\n```')
+    sucesso('Here it is:\n```json\n{"summary": "fenced"}\n```')
 elif mode == "invalido":
-    sucesso("não sei responder em JSON")
+    sucesso("I cannot answer in JSON")
 elif mode == "invalido_uma_vez":
-    sucesso("lixo" if contar() == 0 else '{"resumo": "segunda"}')
+    sucesso("garbage" if contar() == 0 else '{"summary": "second"}')
 elif mode == "lento":
     time.sleep(10)
     sucesso("{}")
 elif mode == "falha":
-    falha("deu ruim")
+    falha("something went wrong")
 elif mode == "cota":
     falha("RESOURCE_EXHAUSTED: quota exceeded", status=429)
 elif mode == "lixo":
-    print("panic: nada de JSON", file=sys.stderr)
+    print("panic: no JSON", file=sys.stderr)
     sys.exit(2)
 elif mode == "modelo_transitorio":
     if contar() == 0:
         falha('invalid model selection (--model "x"): model x is not recognized as a known model or custom model in settings')
     else:
-        sucesso('{"resumo": "ok"}')
+        sucesso('{"summary": "ok"}')
