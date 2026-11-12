@@ -90,7 +90,7 @@ def test_chat_ok(bins, log, monkeypatch):
     r = _client(bins).post("/v1/chat/completions", json=CORPO)
     assert r.status_code == 200, r.text
     d = r.json()
-    assert json.loads(d["choices"][0]["message"]["content"]) == {"resumo": "ok"}
+    assert json.loads(d["choices"][0]["message"]["content"]) == {"summary": "ok"}
     assert d["model"] == "gemini-x-low"
     assert d["usage"] == {"prompt_tokens": 120, "completion_tokens": 15, "total_tokens": 135}
     chamada = _chamadas(log)[0]
@@ -129,7 +129,7 @@ def test_sdk_openai(bins, monkeypatch):
             messages=CORPO["messages"],
             extra_body={"metadata": {"tipo": "cliente"}},
         )
-        assert json.loads(resp.choices[0].message.content) == {"resumo": "ok"}
+        assert json.loads(resp.choices[0].message.content) == {"summary": "ok"}
         assert resp.usage.prompt_tokens == entrada
 
 
@@ -145,7 +145,7 @@ def test_json_invalido_refaz_uma_vez(bins, log, tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_CLI_CONTADOR", str(tmp_path / "n"))
     r = _client(bins).post("/v1/chat/completions", json=CORPO)
     assert r.status_code == 200
-    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"resumo": "segunda"}
+    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"summary": "second"}
     assert r.json()["usage"]["prompt_tokens"] == 240  # soma as duas chamadas
     assert len(_chamadas(log)) == 2
 
@@ -314,7 +314,7 @@ def test_codex(bins, log, monkeypatch):
              "response_format": {"type": "json_schema", "json_schema": {"name": "x", "schema": schema}}}
     r = _client(bins).post("/v1/chat/completions", json=corpo)
     assert r.status_code == 200, r.text
-    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"resumo": "ok"}
+    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"summary": "ok"}
     # cached_input_tokens is already included in input_tokens.
     assert r.json()["usage"] == {"prompt_tokens": 300, "completion_tokens": 9, "total_tokens": 309}
     chamada = _chamadas(log)[0]
@@ -334,7 +334,7 @@ def test_kiro(bins, log, monkeypatch):
     monkeypatch.setenv("FAKE_CLI_MODE", "ok")
     r = _client(bins).post("/v1/chat/completions", json={**CORPO, "model": "kiro/claude-haiku-4.5"})
     assert r.status_code == 200, r.text
-    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"resumo": "ok"}
+    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"summary": "ok"}
     assert r.json()["usage"]["total_tokens"] == 0
     args = _chamadas(log)[0]["args"]
     assert args[:2] == ["chat", "--no-interactive"] and "--trust-tools=" in args
@@ -427,8 +427,8 @@ def test_nova_tentativa_vira_transcricao():
     p = montar(
         [
             {"role": "system", "content": "SYS"},
-            {"role": "user", "content": "entrada"},
-            {"role": "assistant", "content": '{"resumo": "tem 12"}'},
+            {"role": "user", "content": "input"},
+            {"role": "assistant", "content": '{"summary": "has 12"}'},
             {"role": "user", "content": "Remove the numbers."},
         ],
         json_mode=True,
@@ -446,7 +446,7 @@ def test_conteudo_em_partes():
 def test_cerca_markdown(bins, monkeypatch):
     monkeypatch.setenv("FAKE_CLI_MODE", "cerca")
     r = _client(bins).post("/v1/chat/completions", json=CORPO)
-    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"resumo": "cercado"}
+    assert json.loads(r.json()["choices"][0]["message"]["content"]) == {"summary": "fenced"}
 
 
 @pytest.mark.parametrize(

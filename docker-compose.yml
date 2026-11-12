@@ -1,0 +1,30 @@
+services:
+  llm-cli-gateway:
+    build:
+      context: .
+      target: runtime
+    image: ghcr.io/sette/llm-cli-gateway:latest
+    container_name: llm-cli-gateway
+    # Mantém o bind estritamente em 127.0.0.1 no host (uso local de desenvolvimento)
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOME: ${HOME}
+      PATH: /app/.venv/bin:${HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      HOST: ${HOST:-127.0.0.1}
+      PORT: ${PORT:-8787}
+    volumes:
+      # Binários dos CLIs instalados no host (inclui alvos de symlinks do claude/codex)
+      - ${HOME}/.local/bin:${HOME}/.local/bin:ro
+      - ${HOME}/.local/share/claude:${HOME}/.local/share/claude:ro
+      # Sessões e credenciais autenticadas dos CLIs no host
+      - ${HOME}/.gemini:${HOME}/.gemini
+      - ${HOME}/.claude:${HOME}/.claude
+      # Descomente se o arquivo ~/.claude.json já existir no host:
+      # - ${HOME}/.claude.json:${HOME}/.claude.json
+      - ${HOME}/.codex:${HOME}/.codex
+      - ${HOME}/.kiro:${HOME}/.kiro
+    restart: unless-stopped
